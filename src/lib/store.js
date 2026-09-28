@@ -65,6 +65,10 @@ export function initStore() {
     } catch (e) {
       console.warn('IndexedDB を開けませんでした', e);
     }
+    // ブラウザが容量不足のときに勝手に消さないよう、保存領域を「消さないで」扱いにしてもらう
+    try {
+      navigator.storage?.persist?.().catch?.(() => {});
+    } catch {}
     notify();
   })();
   return ready;
@@ -128,7 +132,7 @@ export function useSong(id) {
 
 // ---------------------------------------------------------------- 同期
 
-const syncState = { status: 'idle', lastSyncedAt: null, error: null };
+const syncState = { status: deviceKey.get() ? 'idle' : 'unpaired', lastSyncedAt: null, error: null };
 const syncSubs = new Set();
 function setSync(p) {
   Object.assign(syncState, p);

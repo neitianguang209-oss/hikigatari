@@ -8,7 +8,29 @@ import { api, lookupAppleMusic } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
 import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist } from '../lib/util.js';
+import { TunerSheet } from './tuner.js';
 const html = htm.bind(React.createElement);
+
+// ---------------------------------------------------------------- 最近の検索語(この端末だけ)
+
+const RECENT_KEY = 'hk.recentQ';
+function loadRecentQueries() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]').slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+function saveRecentQueries(list) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 8)));
+  } catch {}
+}
+function rememberQuery(q) {
+  const v = (q || '').trim();
+  if (!v) return;
+  saveRecentQueries([v, ...loadRecentQueries().filter((x) => norm(x) !== norm(v))]);
+}
 
 // ---------------------------------------------------------------- 検索結果を開く(ライブラリに入れて曲画面へ)
 
@@ -64,7 +86,11 @@ function SongRow({ song, onOpen }) {
     </button>
     <button
       className=${cx('icon-btn fav-btn', song.fav && 'is-on')}
-      onClick=${() => lib.patch(song.id, { fav: !song.fav, favAt: !song.fav ? Date.now() : song.favAt })}
+      onClick=${() => {
+        const was = song.fav;
+        lib.patch(song.id, { fav: !was, favAt: !was ? Date.now() : song.favAt });
+        if (was) toast(`「${song.title}」をお気に入りから外しました`, { action: { label: '元に戻す', onClick: () => lib.patch(song.id, { fav: true }) } });
+      }}
       aria-label=${song.fav ? 'お気に入りから外す' : 'お気に入りに入れる'}
       aria-pressed=${!!song.fav}
     >
@@ -124,14 +150,32 @@ export function Home() {
     () => songs.filter((s) => !s.fav && s.openedAt).sort((a, b) => b.openedAt - a.openedAt).slice(0, 12),
     [songs],
   );
+  const [recentQ, setRecentQ] = useState(loadRecentQueries);
+  const [tuner, setTuner] = useState(false);
+  // お気に入りが増えてきたら絞り込み欄を出す
+  const [filter, setFilter] = useState('');
+  const shownFavs = useMemo(() => {
+    const w = norm(filter);
+    return w ? favs.filter((s) => norm(s.title).includes(w) || norm(s.artist).includes(w)) : favs;
+  }, [favs, filter]);
 
   return html`<div className="page home">
     <header className="home-top">
       <div className="brand"><${Logo} size=${30} /><span>ひきがたり</span></div>
-      <button className="icon-btn" onClick=${() => go('/settings')} aria-label="設定"><${Icon} name="settings" /></button>
+      <div className="home-top-actions">
+        <button className="icon-btn" onClick=${() => setTuner(true)} aria-label="チューナー" title="チューナー"><${Icon} name="tuner" /></button>
+        <button className="icon-btn" onClick=${() => go('/settings')} aria-label="設定" title="設定"><${Icon} name="settings" /></button>
+      </div>
     </header>
+    <${TunerSheet} open=${tuner} onClose=${() => setTuner(false)} />
 
     <${SearchBox} onSubmit=${(q) => go('/search?q=' + encodeURIComponent(q))} />
+    ${recentQ.length
+      ? html`<div className="recent-q" aria-label="最近の検索">
+          ${recentQ.map((q) => html`<button key=${q} className="chip chip-sm" onClick=${() => go('/search?q=' + encodeURIComponent(q))}>${q}</button>`)}
+          <button className="link-btn" onClick=${() => { saveRecentQueries([]); setRecentQ([]); }}>消す</button>
+        </div>`
+      : null}
 
     ${!prefs.appleCardDismissed
       ? html`<div className="apple-card">
@@ -159,8 +203,13 @@ export function Home() {
             />`
           : null}
       </div>
+      ${favs.length >= 8
+        ? html`<input className="fav-filter" type="search" placeholder="お気に入りを絞り込む" value=${filter} onInput=${(e) => setFilter(e.target.value)} aria-label="お気に入りを絞り込む" />`
+        : null}
       ${favs.length
-        ? html`<ul className="song-list">${favs.map((s) => html`<${SongRow} key=${s.id} song=${s} onOpen=${() => go('/song/' + s.id)} />`)}</ul>`
+        ? shownFavs.length
+          ? html`<ul className="song-list">${shownFavs.map((s) => html`<${SongRow} key=${s.id} song=${s} onOpen=${() => go('/song/' + s.id)} />`)}</ul>`
+          : html`<p className="muted small">「${filter}」に合うお気に入りはありません</p>`
         : html`<${Empty} icon="music" title="まだお気に入りはありません">
             曲を開いて右上の ☆ を押すと、ここに並びます。<br />よく弾く曲・練習中の曲を入れておきましょう。
           </${Empty}>`}
@@ -206,6 +255,7 @@ export function Search({ q }) {
   const [state, setState] = useState({ loading: true, error: null, groups: [] });
   useEffect(() => {
     if (!q) return;
+    rememberQuery(q);
     let alive = true;
     if (searchCache.has(q)) {
       setState({ loading: false, error: null, ...searchCache.get(q) });

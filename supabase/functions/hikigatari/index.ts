@@ -600,6 +600,28 @@ async function isOwned() {
   return (count ?? 0) > 0;
 }
 
+// ---- つなぐための固定の6桁(設定で確認・変更できる)
+const PIN_MAX_FAILS = 5;
+const PIN_LOCK_MS = 15 * 60e3;
+
+async function pinRow() {
+  const { data } = await db.from('hikigatari_pin').select('pin,failed,locked_until,updated_at').eq('id', 1).maybeSingle();
+  return data;
+}
+
+// まだ決まっていなければ、はじめて見るときにランダムで作る
+async function ensurePin() {
+  const row = await pinRow();
+  if (row) return row;
+  const pin = randomCode();
+  await db.from('hikigatari_pin').upsert({ id: 1, pin, failed: 0, locked_until: null, updated_at: new Date().toISOString() });
+  return { pin, failed: 0, locked_until: null, updated_at: new Date().toISOString() };
+}
+
+function weakPin(pin: string) {
+  return /^(\d)\1{5}$/.test(pin) || '01234567890'.includes(pin) || '09876543210'.includes(pin);
+}
+
 async function newDevice(name: string) {
   const key = randomKey();
   const { data, error } = await db
@@ -654,7 +676,19 @@ Deno.serve(async (req) => {
     if (action === 'pair_finish') {
       const code = String(body.code || '').replace(/\D/g, '');
       if (code.length !== 6) return json({ error: '6桁の数字を入れてください' }, 400);
-      const nowIso = new Date().toISOString();
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      const row = await pinRow();
+      if (row?.locked_until && new Date(row.locked_until).getTime() > now) {
+        const min = Math.ceil((new Date(row.locked_until).getTime() - now) / 60e3);
+        return json({ error: `まちがいが続いたので、あと${min}分ほどつなげません` }, 429);
+      }
+      // 設定画面の固定の6桁
+      if (row && code === row.pin) {
+        if (row.failed) await db.from('hikigatari_pin').update({ failed: 0 }).eq('id', 1);
+        return json(await newDevice(body.name));
+      }
+      // 以前の「10分だけ使える数字」もまだ受け付ける
       const { data: codes } = await db
         .from('hikigatari_pair_codes')
         .select('id,code_hash,attempts')
@@ -663,12 +697,23 @@ Deno.serve(async (req) => {
         .lt('attempts', 5);
       const h = await sha256('pc:' + code);
       const hit = (codes ?? []).find((c) => c.code_hash === h);
-      if (!hit) {
-        for (const c of codes ?? []) await db.from('hikigatari_pair_codes').update({ attempts: c.attempts + 1 }).eq('id', c.id);
-        return json({ error: 'コードが違うか、期限(10分)が切れています' }, 403);
+      if (hit) {
+        await db.from('hikigatari_pair_codes').update({ used_at: nowIso }).eq('id', hit.id);
+        return json(await newDevice(body.name));
       }
-      await db.from('hikigatari_pair_codes').update({ used_at: nowIso }).eq('id', hit.id);
-      return json(await newDevice(body.name));
+      for (const c of codes ?? []) await db.from('hikigatari_pair_codes').update({ attempts: c.attempts + 1 }).eq('id', c.id);
+      // まちがいを数え、続いたらしばらく受け付けない(総当たり対策)
+      if (row) {
+        const failed = (row.failed || 0) + 1;
+        const lock = failed >= PIN_MAX_FAILS;
+        await db
+          .from('hikigatari_pin')
+          .update({ failed: lock ? 0 : failed, locked_until: lock ? new Date(now + PIN_LOCK_MS).toISOString() : row.locked_until })
+          .eq('id', 1);
+        if (lock) return json({ error: 'まちがいが5回続いたので、15分ほどつなげません' }, 429);
+        return json({ error: `数字が違います（あと${PIN_MAX_FAILS - failed}回まちがえると15分つなげなくなります）` }, 403);
+      }
+      return json({ error: '数字が違います' }, 403);
     }
 
     // --- ここから先は端末の鍵が必要
@@ -684,6 +729,17 @@ Deno.serve(async (req) => {
         const expires = new Date(Date.now() + 10 * 60e3).toISOString();
         await db.from('hikigatari_pair_codes').insert({ code_hash: await sha256('pc:' + code), created_by: dev.id, expires_at: expires });
         return json({ code, expiresAt: expires });
+      }
+      case 'pin_get': {
+        const row = await ensurePin();
+        return json({ pin: row.pin, updatedAt: row.updated_at });
+      }
+      case 'pin_set': {
+        const pin = String(body.pin || '').replace(/\D/g, '');
+        if (pin.length !== 6) return json({ error: '6桁の数字にしてください' }, 400);
+        if (weakPin(pin)) return json({ error: '同じ数字だけ・連番は当てられやすいので使えません' }, 400);
+        await db.from('hikigatari_pin').upsert({ id: 1, pin, failed: 0, locked_until: null, updated_at: new Date().toISOString() });
+        return json({ ok: true });
       }
       case 'devices': {
         const { data } = await db.from('hikigatari_devices').select('id,name,created_at,last_seen_at').order('created_at');

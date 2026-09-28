@@ -106,7 +106,7 @@ export function Welcome({ onDone, initialMode = null }) {
             : showCode
               ? html`<form className="welcome-box" onSubmit=${pair}>
                   <p><b>この端末をつなぐ</b></p>
-                  <p className="small muted">いつも使っている端末で <b>設定 → ほかの端末を追加</b> を開くと、6桁の数字が出ます。それをここに入れてください。</p>
+                  <p className="small muted">いつも使っている端末の <b>設定 → 端末と同期 →「つなぐための6桁の数字」</b> に出ている数字を入れてください。</p>
                   <input
                     ref=${inputRef}
                     className="code-input"

@@ -240,9 +240,10 @@ export function guitarVoicings(name) {
       seen.add(k);
       list.push(v);
     }
-    // やさしい順。教本の形は少しだけ優先する(見慣れた形のほうが覚えやすい)
+    // やさしい順。教本の形は少しだけ優先する(見慣れた形のほうが覚えやすい)。
+    // 教本の形(Bm のセーハなど)は難しくても必ず候補に残す
     const rank = (v) => voicingDifficulty(v) - (v.curated ? 0.5 : 0);
-    list = list.sort((a, b) => rank(a) - rank(b)).slice(0, 8);
+    list = list.sort((a, b) => rank(a) - rank(b)).filter((v, i) => i < 8 || v.curated);
   }
   voicingCache.set(name, list);
   return list;

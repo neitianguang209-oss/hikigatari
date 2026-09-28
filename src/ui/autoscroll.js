@@ -59,7 +59,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const [playing, setPlaying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
-  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0 }).current;
+  const [loop, setLoopState] = useState(null); // 区間リピート { from, to }(行の番号)
+  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, beatEl: null, beatShown: -1 }).current;
   const live = useRef({});
 
   const tl = useMemo(() => {
@@ -193,11 +194,21 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         setCountdown(0);
       }
     }
+    // 区間リピート: 最後の行を弾き終えたら最初の行へ戻る(はみ出した分は持ち越してテンポを崩さない)
+    if (s.loop && s.countEnd == null) {
+      const a = s.tl.starts[s.loop.from];
+      const b = s.tl.starts[s.loop.to] + s.tl.durs[s.loop.to];
+      if (eff >= b && b > a) {
+        s.beat = a + ((eff - b) % (b - a));
+        eff = s.beat;
+      }
+    }
     // メトロノーム(カウント中は必ず鳴らす)。譜面の伸び縮みとは別に、本来のBPMで刻む
     const whole = Math.floor(s.clickPhase + 1e-6);
     if (whole !== s.lastInt) {
       s.lastInt = whole;
       if (!s.holding && (C || s.countEnd != null)) clickSound(((whole % bpb) + bpb) % bpb === 0);
+      showBeat(((whole % bpb) + bpb) % bpb);
     }
     if (!s.holding) setScroll(posAtBeat(eff) - anchor());
     highlight(eff);
@@ -212,11 +223,30 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     s.raf = requestAnimationFrame(frame);
   };
 
+  // 拍の目印(再生バーの点)。React を通さず直接切り替える
+  const showBeat = (b) => {
+    const el = s.beatEl;
+    if (!el || b === s.beatShown) return;
+    el.children[s.beatShown]?.classList.remove('on');
+    el.children[b]?.classList.add('on');
+    s.beatShown = b;
+  };
+  const bindBeat = useCallback((el) => {
+    s.beatEl = el;
+    s.beatShown = -1;
+  }, []);
+
   const start = (fromBeat) => {
     if (!s.tl.timed.length) return;
     unlockAudio();
     measure();
-    const b = fromBeat != null ? fromBeat : beatFromScroll();
+    let b = fromBeat != null ? fromBeat : beatFromScroll();
+    // 区間リピート中は、区間の外から始めたら区間の頭から
+    if (s.loop) {
+      const a = s.tl.starts[s.loop.from];
+      const e = s.tl.starts[s.loop.to] + s.tl.durs[s.loop.to];
+      if (b < a || b >= e) b = a;
+    }
     s.startBeat = b >= s.tl.total ? 0 : b;
     const { countIn: ci, beatsPerBar: bpb } = live.current;
     if (ci) {
@@ -243,6 +273,22 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     setCountdown(0);
     setPlaying(false);
     clearHighlight();
+    s.beatEl?.children[s.beatShown]?.classList.remove('on');
+    s.beatShown = -1;
+  };
+
+  // 区間リピートを決める/やめる(行の番号。範囲外や逆順も受け付ける)
+  const setLoop = (from, to) => {
+    if (from == null) {
+      s.loop = null;
+      setLoopState(null);
+      return;
+    }
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    s.loop = { from: lo, to: hi };
+    setLoopState({ from: lo, to: hi });
+    if (!s.playingFlag) jumpToLine(lo);
   };
 
   const toggle = () => (s.playingFlag ? stop() : start());
@@ -310,6 +356,9 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   useEffect(() => {
     measure();
+    // 譜面が変わったら(版の切り替えなど)区間リピートは解除する
+    s.loop = null;
+    setLoopState(null);
   }, [lines]);
 
   useEffect(() => () => {
@@ -317,5 +366,5 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     cancelAnimationFrame(s.raf);
   }, []);
 
-  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, fit, scrollRate };
+  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, fit, scrollRate, loop, setLoop, bindBeat };
 }

@@ -28,6 +28,17 @@ function App() {
   const [ready, setReady] = useState(false);
   const [paired, setPaired] = useState(!!deviceKey.get());
   const [lost, setLost] = useState(false);
+  const [updated, setUpdated] = useState(false);
+
+  // 新しい版が公開されて裏で入れ替わったら、再読み込みを案内する(はじめての登録のときは出さない)
+  useEffect(() => {
+    const sw = navigator.serviceWorker;
+    if (!sw) return;
+    const hadController = !!sw.controller;
+    const onChange = () => hadController && setUpdated(true);
+    sw.addEventListener('controllerchange', onChange);
+    return () => sw.removeEventListener('controllerchange', onChange);
+  }, []);
 
   useEffect(() => {
     applyTheme();
@@ -73,6 +84,12 @@ function App() {
         </div>`
       : null}
     ${page}
+    ${updated
+      ? html`<div className="update-banner" role="status">
+          <span>新しい版があります</span>
+          <button className="btn btn-sm" onClick=${() => location.reload()}>更新する</button>
+        </div>`
+      : null}
     <${ToastHost} />
   </${React.Fragment}>`;
 }

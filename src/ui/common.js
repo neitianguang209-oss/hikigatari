@@ -42,8 +42,9 @@ export function Sheet({ open, onClose, title, children, wide = false }) {
 // ---------------------------------------------------------------- トースト
 
 const toastSubs = new Set();
-export function toast(text, { kind = 'info', ms = 2600 } = {}) {
-  toastSubs.forEach((f) => f({ text, kind, id: Date.now() + Math.random(), ms }));
+// action: { label, onClick } を渡すと「元に戻す」などのボタンが付く(そのぶん長めに出す)
+export function toast(text, { kind = 'info', ms, action = null } = {}) {
+  toastSubs.forEach((f) => f({ text, kind, id: Date.now() + Math.random(), ms: ms || (action ? 6000 : 2600), action }));
 }
 
 export function ToastHost() {
@@ -56,8 +57,17 @@ export function ToastHost() {
     toastSubs.add(f);
     return () => toastSubs.delete(f);
   }, []);
+  const run = (t) => {
+    setItems((xs) => xs.filter((x) => x.id !== t.id));
+    t.action.onClick();
+  };
   return html`<div className="toast-host" aria-live="polite">
-    ${items.map((t) => html`<div key=${t.id} className=${'toast toast-' + t.kind}>${t.text}</div>`)}
+    ${items.map(
+      (t) => html`<div key=${t.id} className=${cx('toast', 'toast-' + t.kind, t.action && 'has-action')}>
+        <span>${t.text}</span>
+        ${t.action ? html`<button className="toast-action" onClick=${() => run(t)}>${t.action.label}</button>` : null}
+      </div>`,
+    )}
   </div>`;
 }
 

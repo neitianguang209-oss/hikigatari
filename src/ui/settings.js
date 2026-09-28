@@ -104,7 +104,7 @@ export function Settings() {
       <div className="set-row"><${SyncBadge} sync=${sync} /><button className="btn btn-sm" disabled=${!hasKey || sync.status === 'syncing'} onClick=${() => syncNow()}>今すぐ同期</button></div>
       ${hasKey
         ? html`<${Devices} />
-            <button className="set-link" onClick=${() => setPairOpen(true)}><${Icon} name="plus" /><span>ほかの端末を追加（iPad・PC・Safari など）</span></button>
+            <button className="set-link" onClick=${() => setPairOpen(true)}><${Icon} name="lock" /><span>つなぐための6桁の数字（確認・変更）</span></button>
             <button className="set-link" onClick=${() => setKeyOpen(true)}><${Icon} name="device" /><span>バックアップ用キー</span></button>`
         : html`<button className="set-link" onClick=${() => go('/pair')}><${Icon} name="device" /><span>この端末をつなぐ</span></button>`}
     </${Section}>
@@ -123,7 +123,7 @@ export function Settings() {
       <p className="set-about muted small">ひきがたり ${APP_VERSION}</p>
     </${Section}>
 
-    <${PairSheet} open=${pairOpen} onClose=${() => setPairOpen(false)} />
+    <${PinSheet} open=${pairOpen} onClose=${() => setPairOpen(false)} />
     <${KeySheet} open=${keyOpen} onClose=${() => setKeyOpen(false)} />
   </div>`;
 }
@@ -176,35 +176,70 @@ function Devices() {
   </ul>`;
 }
 
-function PairSheet({ open, onClose }) {
-  const [code, setCode] = useState(null);
-  const [left, setLeft] = useState(0);
+// つなぐための固定の6桁(いつでも確認・自分の好きな数字に変更できる)
+function PinSheet({ open, onClose }) {
+  const [pin, setPin] = useState(null);
   const [err, setErr] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setCode(null);
+    setPin(null);
     setErr(null);
-    api('pair_start')
-      .then((r) => setCode(r))
+    setEditing(false);
+    api('pin_get')
+      .then((r) => setPin(r.pin))
       .catch((e) => setErr(e.message));
   }, [open]);
-  useEffect(() => {
-    if (!code) return;
-    const tick = () => setLeft(Math.max(0, Math.round((new Date(code.expiresAt).getTime() - Date.now()) / 1000)));
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [code]);
-  return html`<${Sheet} open=${open} onClose=${onClose} title="ほかの端末を追加">
+  const save = async (e) => {
+    e.preventDefault();
+    if (draft.length !== 6) return;
+    setBusy(true);
+    try {
+      await api('pin_set', { pin: draft });
+      setPin(draft);
+      setEditing(false);
+      toast('数字を変えました');
+    } catch (er) {
+      toast(er.message, { kind: 'error', ms: 3600 });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return html`<${Sheet} open=${open} onClose=${onClose} title="つなぐための6桁の数字">
     ${err
       ? html`<p className="muted">${err}</p>`
-      : !code
+      : !pin
         ? html`<${Spinner} />`
-        : html`<div className="pair-code">
-            <p className="panel-lead">追加したい端末でこのアプリを開き、「この端末をつなぐ」にこの数字を入れてください。</p>
-            <div className="pair-digits" aria-label=${'コード ' + code.code}>${code.code.split('').map((c, i) => html`<span key=${i}>${c}</span>`)}</div>
-            <p className="muted small center">${left > 0 ? `あと ${Math.floor(left / 60)}分${String(left % 60).padStart(2, '0')}秒 有効` : '期限が切れました。開き直すと新しい数字が出ます'}</p>
-          </div>`}
+        : editing
+          ? html`<form className="pin-edit" onSubmit=${save}>
+              <p className="panel-lead">新しい6桁の数字を決めてください（同じ数字だけ・連番は使えません）。</p>
+              <input
+                className="code-input"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength="6"
+                value=${draft}
+                onInput=${(e) => setDraft(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="000000"
+                aria-label="新しい6桁の数字"
+                autoFocus
+              />
+              <div className="row-gap center">
+                <button type="button" className="btn" onClick=${() => setEditing(false)}>やめる</button>
+                <button className="btn btn-primary" disabled=${busy || draft.length !== 6}>${busy ? '保存しています…' : 'この数字にする'}</button>
+              </div>
+            </form>`
+          : html`<div className="pair-code">
+              <p className="panel-lead">iPad・PC・Safari などほかの端末でこのアプリを開き、「この端末をつなぐ」にこの数字を入れるとつながります。</p>
+              <div className="pair-digits" aria-label=${'6桁の数字 ' + pin}>${pin.split('').map((c, i) => html`<span key=${i}>${c}</span>`)}</div>
+              <div className="row-gap center">
+                <button className="btn" onClick=${() => copyText(pin)}><${Icon} name="copy" size=${16} /> コピー</button>
+                <button className="btn" onClick=${() => { setDraft(''); setEditing(true); }}><${Icon} name="edit" size=${16} /> 変更する</button>
+              </div>
+              <p className="panel-note">5回続けてまちがえると、15分つなげなくなります（当てずっぽうで入れられないように）。</p>
+            </div>`}
   </${Sheet}>`;
 }
 

@@ -3,15 +3,16 @@ import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, 
 import htm from 'htm';
 import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
-import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard } from './diagrams.js';
+import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
 import { useAutoScroll } from './autoscroll.js';
+import { TunerSheet } from './tuner.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
 import { rankCapos, shapeName, guitarVoicings, voicingDifficulty } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { lib, useSong } from '../lib/store.js';
 import { api } from '../lib/api.js';
-import { usePrefs } from '../lib/prefs.js';
+import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
 import { cx, sourceName, norm, baseTitle, sameArtist } from '../lib/util.js';
 const html = htm.bind(React.createElement);
@@ -256,8 +257,56 @@ function SongReady({ song, reload }) {
     scroll.measure();
   }, [instrument, inline, fontScale, capo, simple, transpose]);
 
+  // 区間リピートの区間選び: null → { step: 'from' } → { step: 'to', from }
+  const [loopSel, setLoopSel] = useState(null);
   const onChord = useCallback((token) => setChordTap(token), []);
-  const onLineTap = useCallback((i) => scroll.playing && scroll.jumpToLine(i), [scroll.playing]);
+  const onLineTap = useCallback(
+    (i) => {
+      const line = parsed.lines[i];
+      const timed = line && (line.type === 'lyric' || line.type === 'chords');
+      if (loopSel) {
+        if (!timed) return;
+        if (loopSel.step === 'from') setLoopSel({ step: 'to', from: i });
+        else {
+          scroll.setLoop(loopSel.from, i);
+          setLoopSel(null);
+          toast('この区間をくり返します');
+        }
+        return;
+      }
+      if (scroll.playing) scroll.jumpToLine(i);
+    },
+    [loopSel, scroll.playing, parsed],
+  );
+  // 見出し(サビ・Aメロ など)をタップ: 区間選び中ならその段落まるごとをくり返す / 演奏中ならそこへ飛ぶ
+  const hasLabels = useMemo(() => parsed.lines.some((l) => l.type === 'label'), [parsed]);
+  const onLabelTap = useCallback(
+    (i) => {
+      const r = sectionOf(parsed.lines, i);
+      if (!r) return;
+      if (loopSel) {
+        scroll.setLoop(r.from, r.to);
+        setLoopSel(null);
+        toast(`「${parsed.lines[i].text}」をくり返します`);
+      } else if (scroll.playing) scroll.jumpToLine(r.from);
+      else {
+        const sc = scrollRef.current;
+        const el = sc?.querySelector(`[data-i="${i}"]`);
+        if (el) sc.scrollTo({ top: sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 8, behavior: 'smooth' });
+      }
+    },
+    [loopSel, scroll.playing, parsed],
+  );
+  const toggleLoop = () => {
+    if (scroll.loop || loopSel) {
+      scroll.setLoop(null);
+      setLoopSel(null);
+    } else setLoopSel({ step: 'from' });
+  };
+  const loopRange = loopSel?.step === 'to' ? { from: loopSel.from, to: loopSel.from } : scroll.loop;
+
+  // 「いつもこの押さえ方」で選んだ形(コード名 → フレット)
+  const picks = prefs.voicingPick || {};
 
   const capoLabel = instrument === 'guitar' ? (capo === 0 ? 'カポなし' : `カポ ${capo}`) : null;
   const flatForShape = keyPrefersFlat(shapeKey);
@@ -275,17 +324,14 @@ function SongReady({ song, reload }) {
         ]}
       />
       ${instrument === 'guitar'
-        ? html`<button className=${cx('chip', typeof st.capo !== 'number' && 'chip-auto')} onClick=${() => setPanel('capo')}>
-              ${capoLabel}${typeof st.capo !== 'number' ? html`<small>自動</small>` : null}
-            </button>
-            <button className=${cx('chip', simple && 'is-on')} aria-pressed=${simple} onClick=${() => setSt({ simple: !simple })}>かんたん</button>
-            `
+        ? html`<button className="chip" onClick=${() => setPanel('capo')} aria-label="カポとかんたんコード">
+            ${capoLabel}${typeof st.capo !== 'number' ? html`<small>自動</small>` : null}
+          </button>`
         : null}
       <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
       <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
         キー ${transpose === 0 ? '原曲' : (transpose > 0 ? '+' : '') + transpose}
       </button>
-      <button className="chip" onClick=${() => setPanel('text')} aria-label="文字の大きさ">Aa</button>
     </div>
 
     <div className="song-body">
@@ -306,7 +352,7 @@ function SongReady({ song, reload }) {
           </div>
 
           <div className="strip-top">
-            <${ChordStrip} names=${uniqueDisplay} instrument=${instrument} onTap=${(n) => setChordTap({ display: n })} />
+            <${ChordStrip} names=${uniqueDisplay} instrument=${instrument} picks=${picks} onTap=${(n) => setChordTap({ display: n })} />
           </div>
 
           <${SheetLines}
@@ -317,6 +363,10 @@ function SongReady({ song, reload }) {
             showBars=${prefs.showBars}
             onChord=${onChord}
             onLine=${onLineTap}
+            onLabel=${onLabelTap}
+            loop=${loopRange}
+            selecting=${!!loopSel}
+            picks=${picks}
           />
 
           <div className="sheet-end">
@@ -328,9 +378,19 @@ function SongReady({ song, reload }) {
       </main>
       <aside className="strip-side" aria-label="この曲のコード">
         <div className="strip-side-title">この曲のコード</div>
-        <${ChordStrip} names=${uniqueDisplay} instrument=${instrument} vertical=${true} onTap=${(n) => setChordTap({ display: n })} />
+        <${ChordStrip} names=${uniqueDisplay} instrument=${instrument} vertical=${true} picks=${picks} onTap=${(n) => setChordTap({ display: n })} />
       </aside>
     </div>
+
+    ${loopSel
+      ? html`<div className="loop-banner" role="status">
+          <span>
+            ${loopSel.step === 'from' ? 'くり返したい区間の、最初の行をタップ' : '次に、最後の行をタップ（同じ行ならその1行だけ）'}
+            ${loopSel.step === 'from' && hasLabels ? html`<small>「サビ」などの見出しをタップすると、その段落まるごと</small>` : null}
+          </span>
+          <button className="btn btn-sm" onClick=${() => setLoopSel(null)}>やめる</button>
+        </div>`
+      : null}
 
     ${scroll.countdown ? html`<div className="countdown" aria-live="assertive">${scroll.countdown}</div>` : null}
 
@@ -338,12 +398,15 @@ function SongReady({ song, reload }) {
       scroll=${scroll}
       bpm=${bpm}
       bpmKnown=${bpmKnown}
+      beatsPerBar=${beatsPerBar}
       click=${st.click ?? prefs.click}
       onClick=${() => setSt({ click: !(st.click ?? prefs.click) })}
       onTempo=${() => setPanel('tempo')}
+      looping=${!!scroll.loop || !!loopSel}
+      onLoop=${toggleLoop}
     />
 
-    <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} />
+    <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} simple=${simple} />
     <${KeyPanel} open=${panel === 'key'} onClose=${() => setPanel(null)} transpose=${transpose} origKey=${origKey} setSt=${setSt} instrument=${instrument} />
     <${TempoPanel}
       open=${panel === 'tempo'}
@@ -359,7 +422,8 @@ function SongReady({ song, reload }) {
       durationMs=${song.durationMs}
     />
     <${TextPanel} open=${panel === 'text'} onClose=${() => setPanel(null)} fontScale=${fontScale} setSt=${setSt} />
-    <${MorePanel} open=${panel === 'more'} onClose=${() => setPanel(null)} song=${song} reload=${reload} />
+    <${MorePanel} open=${panel === 'more'} onClose=${() => setPanel(null)} song=${song} reload=${reload} onText=${() => setPanel('text')} onTuner=${() => setPanel('tuner')} />
+    <${TunerSheet} open=${panel === 'tuner'} onClose=${() => setPanel(null)} />
     <${ChordPanel}
       tap=${chordTap}
       onClose=${() => setChordTap(null)}
@@ -368,6 +432,7 @@ function SongReady({ song, reload }) {
       instrument=${instrument}
       noteStyle=${prefs.noteStyle}
       flat=${instrument === 'guitar' ? flatForShape : soundFlat}
+      picks=${picks}
     />
   </div>`;
 }
@@ -411,7 +476,22 @@ function fitLines(root) {
   }
 }
 
-const SheetLines = memo(function SheetLines({ lines, display, instrument, inline, showBars, onChord, onLine }) {
+// 見出しの次の行から、次の見出しの手前までのうち、歌詞・コードのある行の範囲
+function sectionOf(lines, i) {
+  let from = -1;
+  let to = -1;
+  for (let k = i + 1; k < lines.length; k++) {
+    const t = lines[k].type;
+    if (t === 'label') break;
+    if (t === 'lyric' || t === 'chords') {
+      if (from < 0) from = k;
+      to = k;
+    }
+  }
+  return from < 0 ? null : { from, to };
+}
+
+const SheetLines = memo(function SheetLines({ lines, display, instrument, inline, showBars, onChord, onLine, onLabel = null, loop = null, selecting = false, picks = null }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
     fitLines(ref.current);
@@ -429,19 +509,30 @@ const SheetLines = memo(function SheetLines({ lines, display, instrument, inline
     });
     ro.observe(el);
     if (document.fonts?.ready) document.fonts.ready.then(() => fitLines(el));
-    return () => ro.disconnect();
+    // 印刷するときは紙の幅で測り直し、終わったら画面の幅に戻す
+    const refit = () => fitLines(el);
+    window.addEventListener('beforeprint', refit);
+    window.addEventListener('afterprint', refit);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('beforeprint', refit);
+      window.removeEventListener('afterprint', refit);
+    };
   }, []);
-  return html`<div className="sheet-lines" ref=${ref}>
-    ${lines.map((l, i) => html`<${Line} key=${i} i=${i} line=${l} display=${display} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} />`)}
+  return html`<div className=${cx('sheet-lines', selecting && 'is-selecting')} ref=${ref}>
+    ${lines.map((l, i) => html`<${Line} key=${i} i=${i} line=${l} display=${display} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} onLabel=${onLabel} selecting=${selecting} picks=${picks} loopMark=${!loop || i < loop.from || i > loop.to ? '' : cx('in-loop', i === loop.from && 'loop-start', i === loop.to && 'loop-end')} />`)}
   </div>`;
 });
 
-const Line = memo(function Line({ line, i, display, instrument, inline, showBars, onChord, onLine }) {
+const Line = memo(function Line({ line, i, display, instrument, inline, showBars, onChord, onLine, onLabel, selecting, picks, loopMark }) {
   if (line.type === 'blank') return html`<div className="ln ln-blank" data-i=${i}></div>`;
-  if (line.type === 'label') return html`<div className="ln ln-label" data-i=${i}><span>${line.text}</span></div>`;
+  if (line.type === 'label')
+    return html`<div className=${cx('ln ln-label', loopMark)} data-i=${i}>
+      ${onLabel ? html`<button className="label-btn" onClick=${() => onLabel(i)}>${line.text}</button>` : html`<span>${line.text}</span>`}
+    </div>`;
   if (line.type === 'comment') return html`<div className="ln ln-comment" data-i=${i}>${line.text}</div>`;
   const hasChord = line.segs.some((s) => s.c);
-  return html`<div className=${cx('ln', 'ln-' + line.type, line.chorus && 'is-chorus', !hasChord && 'ln-plain')} data-i=${i} onClick=${() => onLine(i)}>
+  return html`<div className=${cx('ln', 'ln-' + line.type, line.chorus && 'is-chorus', !hasChord && 'ln-plain', loopMark)} data-i=${i} onClick=${() => onLine(i)}>
     ${line.segs.map((s, k) => {
       const name = s.c ? display.get(s.c) || s.c : null;
       return html`<span className=${cx('seg', s.c && 'has-chord')} key=${k}>
@@ -449,8 +540,8 @@ const Line = memo(function Line({ line, i, display, instrument, inline, showBars
           ? html`<span className="ch">
               ${s.bar && showBars ? html`<i className="bar" aria-hidden="true"></i>` : null}
               ${s.c
-                ? html`<button className="chord" onClick=${(e) => { e.stopPropagation(); onChord(s.c); }}>
-                    ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} instrument=${instrument} />` : null}
+                ? html`<button className="chord" onClick=${(e) => { if (selecting) return; e.stopPropagation(); onChord(s.c); }}>
+                    ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} instrument=${instrument} pick=${picks?.[name]} />` : null}
                     <span className="chord-name"><${ChordText} name=${pretty(name)} /></span>
                   </button>`
                 : html`<span className="chord-space"> </span>`}
@@ -472,17 +563,16 @@ export function SheetPreview({ lines }) {
   return html`<div className="sheet-inner preview"><${SheetLines} lines=${lines} display=${display} instrument="piano" inline=${false} showBars=${true} onChord=${() => {}} onLine=${() => {}} /></div>`;
 }
 
-const MiniDiagram = memo(function MiniDiagram({ name, instrument }) {
+const MiniDiagram = memo(function MiniDiagram({ name, instrument, pick }) {
   if (instrument === 'piano') return html`<span className="mini-diagram mini-staff"><${StaffDiagram} name=${name} width=${46} /></span>`;
-  const v = guitarVoicings(name)[0];
-  return html`<span className="mini-diagram"><${GuitarDiagram} voicing=${v} width=${52} fingers=${false} compact=${true} /></span>`;
+  return html`<span className="mini-diagram"><${GuitarDiagram} voicing=${chosenVoicing(name, pick)} width=${52} fingers=${false} compact=${true} /></span>`;
 });
 
-function ChordStrip({ names, instrument, onTap, vertical = false }) {
+function ChordStrip({ names, instrument, onTap, vertical = false, picks = null }) {
   if (!names.length) return null;
   if (instrument === 'guitar')
     return html`<div className=${cx('chord-strip', vertical && 'is-vertical')}>
-      ${names.map((n) => html`<${GuitarChordCard} key=${n} name=${n} label=${html`<${ChordText} name=${pretty(n)} />`} onClick=${() => onTap(n)} />`)}
+      ${names.map((n) => html`<${GuitarChordCard} key=${n} name=${n} pick=${picks?.[n]} label=${html`<${ChordText} name=${pretty(n)} />`} onClick=${() => onTap(n)} />`)}
     </div>`;
   return html`<div className=${cx('chord-strip', vertical && 'is-vertical')}>
     ${names.map((n) => html`<${PianoChordCard} key=${n} name=${n} label=${html`<${ChordText} name=${pretty(n)} />`} onClick=${() => onTap(n)} />`)}
@@ -491,9 +581,12 @@ function ChordStrip({ names, instrument, onTap, vertical = false }) {
 
 // ---------------------------------------------------------------- 再生バー
 
-function Transport({ scroll, bpm, bpmKnown, click, onClick, onTempo }) {
+function Transport({ scroll, bpm, bpmKnown, beatsPerBar, click, onClick, onTempo, looping, onLoop }) {
   return html`<div className="transport">
     <div className="transport-progress" style=${{ transform: `scaleX(${scroll.progress})` }}></div>
+    <div className=${cx('beat-dots', scroll.playing && 'is-playing')} ref=${scroll.bindBeat} aria-hidden="true">
+      ${Array.from({ length: Math.min(8, beatsPerBar || 4) }, (_, i) => html`<i key=${i}></i>`)}
+    </div>
     <button className="icon-btn" onClick=${scroll.toStart} aria-label="最初に戻る"><${Icon} name="skipBack" /></button>
     <button className=${cx('tempo-btn', !bpmKnown && 'is-guess')} onClick=${onTempo} aria-label="テンポを変える">
       <span className="tempo-note">♩</span><span className="tempo-num">${bpm}</span><span className="tempo-unit">BPM</span>
@@ -504,20 +597,25 @@ function Transport({ scroll, bpm, bpmKnown, click, onClick, onTempo }) {
     <button className=${cx('icon-btn', click && 'is-on')} onClick=${onClick} aria-pressed=${click} aria-label="クリック音">
       <${Icon} name="metronome" />
     </button>
-    <button className="icon-btn" onClick=${() => scroll.step(1)} aria-label="次の行へ"><${Icon} name="back" className="rot-270" /></button>
+    <button className=${cx('icon-btn', looping && 'is-on')} onClick=${onLoop} aria-pressed=${looping} aria-label=${looping ? '区間リピートをやめる' : '区間リピート'}>
+      <${Icon} name="repeat" />
+    </button>
   </div>`;
 }
 
 // ---------------------------------------------------------------- パネル類
 
-function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding }) {
+function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, simple }) {
   if (!rank) return null;
   // 出てくる回数の多いコードから5つを見本として出す
   const top = [...stats.count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c]) => sounding.get(c));
   const maxAvg = Math.max(...rank.rows.map((r) => r.avg));
   const minAvg = Math.min(...rank.rows.map((r) => r.avg));
-  return html`<${Sheet} open=${open} onClose=${onClose} title="カポの位置">
-    <p className="panel-lead">バーが長いほど押さえやすい位置です。「自動」なら一番弾きやすい位置を選び続けます。</p>
+  return html`<${Sheet} open=${open} onClose=${onClose} title="カポとかんたんコード">
+    <div className="panel-switch">
+      <${Switch} label="かんたんコード" hint="押さえにくいコードを、響きの近い押さえやすい形に置き換えます" checked=${simple} onChange=${(v) => setSt({ simple: v })} />
+    </div>
+    <p className="panel-lead">バーが長いほど押さえやすいカポ位置です。「自動」なら一番弾きやすい位置を選び続けます。</p>
     <button className=${cx('capo-row', auto && 'is-on')} onClick=${() => { setSt({ capo: null }); onClose(); }}>
       <span className="capo-name">自動</span>
       <span className="capo-shapes">いちばん押さえやすい位置（今は ${rank.best === 0 ? 'カポなし' : 'カポ ' + rank.best}）</span>
@@ -617,7 +715,13 @@ function TextPanel({ open, onClose, fontScale, setSt }) {
   </${Sheet}>`;
 }
 
-function MorePanel({ open, onClose, song, reload }) {
+// 原曲を Apple Music で開く(曲が特定できていればその曲、分からなければ検索)
+function appleMusicUrl(song) {
+  if (song.appleId) return `https://music.apple.com/jp/song/${song.appleId}`;
+  return `https://music.apple.com/jp/search?term=${encodeURIComponent(`${baseTitle(song.title)} ${song.artist || ''}`.trim())}`;
+}
+
+function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
   const others = (song.sources || []).filter((s) => !(s.source === song.source && s.id === song.sourceId));
   const switchTo = async (s) => {
     if (song.edited && !confirm('編集した譜面は消えます。切り替えますか？')) return;
@@ -639,6 +743,11 @@ function MorePanel({ open, onClose, song, reload }) {
         </div>`
       : null}
     <div className="menu-group">
+      <a className="menu-item" href=${appleMusicUrl(song)} target="_blank" rel="noopener" onClick=${onClose}><${Icon} name="headphones" /><span className="menu-item-text">Apple Music で原曲を聴く</span></a>
+      <button className="menu-item" onClick=${onTuner}><${Icon} name="tuner" /><span className="menu-item-text">チューナー（ギターの音合わせ）</span></button>
+    </div>
+    <div className="menu-group">
+      <button className="menu-item" onClick=${() => { onClose(); onText(); }}><${Icon} name="text" /><span className="menu-item-text">文字の大きさ</span></button>
       <button className="menu-item" onClick=${() => { onClose(); go('/edit/' + song.id); }}><${Icon} name="edit" /><span className="menu-item-text">譜面を直す・書き足す</span></button>
       ${song.source !== 'manual'
         ? html`<button className="menu-item" onClick=${() => { onClose(); reload(true); }}><${Icon} name="refresh" /><span className="menu-item-text">譜面を取り直す（元サイトの最新にする）</span></button>`
@@ -646,23 +755,43 @@ function MorePanel({ open, onClose, song, reload }) {
       ${song.sourceUrl
         ? html`<a className="menu-item" href=${song.sourceUrl} target="_blank" rel="noopener"><${Icon} name="link" /><span className="menu-item-text">元のページを開く</span></a>`
         : null}
+      <button className="menu-item" onClick=${() => { onClose(); setTimeout(() => window.print(), 350); }}><${Icon} name="print" /><span className="menu-item-text">印刷する・PDFにする</span></button>
       <button className="menu-item is-danger" onClick=${async () => {
         if (!confirm(`「${song.title}」をこのアプリから消しますか？`)) return;
+        const keep = lib.get(song.id);
         await lib.remove(song.id);
         onClose();
         back('/');
-        toast('消しました');
+        toast('消しました', { action: { label: '元に戻す', onClick: async () => { await lib.put({ ...keep, deleted: false }); toast('元に戻しました'); } } });
       }}><${Icon} name="trash" /><span className="menu-item-text">この曲を消す</span></button>
     </div>
     ${others.length === 0 && song.source !== 'manual' ? html`<p className="panel-note">ほかのサイトの版は見つかっていません。</p>` : null}
   </${Sheet}>`;
 }
 
-function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, flat }) {
+function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, flat, picks }) {
   const [idx, setIdx] = useState(0);
-  useEffect(() => setIdx(0), [tap]);
   const name = tap ? (typeof tap === 'string' ? display.get(tap) : tap.display) : null;
   const snd = tap && typeof tap === 'string' ? sounding.get(tap) : null;
+  // 開いたときは「いつもの形」を選んでいればそれを最初に出す
+  useEffect(() => {
+    if (instrument === 'guitar' && name && picks?.[name]) {
+      const i = guitarVoicings(name).findIndex((v) => v.frets.join(',') === picks[name]);
+      setIdx(i >= 0 ? i : 0);
+    } else setIdx(0);
+  }, [tap]);
+  const togglePick = (v) => {
+    const cur = { ...(getPrefs().voicingPick || {}) };
+    const f = v.frets.join(',');
+    if (cur[name] === f) {
+      delete cur[name];
+      toast('いちばんやさしい形に戻しました');
+    } else {
+      cur[name] = f;
+      toast(`${pretty(name)} はいつもこの形で出します`);
+    }
+    setPrefs({ voicingPick: cur });
+  };
   let body = null;
   if (name && name.startsWith('/') && instrument === 'guitar') {
     body = html`<p className="panel-lead center">いちばん低い音（ベース）だけを <b>${pretty(name.slice(1))}</b> に変える指示です。<br />ギターでは6弦・5弦のその音だけを鳴らすか、ひとつ前のコードのまま弾いてください。</p>`;
@@ -676,10 +805,17 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
             <button className="btn" onClick=${() => setIdx((idx - 1 + vs.length) % vs.length)} aria-label="前の押さえ方"><${Icon} name="back" /></button>
             <span className="voicing-count">
               <b>${(idx % vs.length) + 1} / ${vs.length}</b>
-              <small>${idx % vs.length === 0 ? 'いちばんやさしい形' : 'ほかの押さえ方'}</small>
+              <small>${v && picks?.[name] === v.frets.join(',') ? 'いつもの形' : idx % vs.length === 0 ? 'いちばんやさしい形' : 'ほかの押さえ方'}</small>
             </span>
             <button className="btn" onClick=${() => setIdx((idx + 1) % vs.length)} aria-label="次の押さえ方"><${Icon} name="back" className="rot-180" /></button>
-          </div>`
+          </div>
+          ${v && (picks?.[name] || idx % vs.length !== 0)
+            ? html`<div className="row-gap center">
+                <button className=${cx('btn btn-sm', picks?.[name] === v.frets.join(',') ? 'btn-ghost' : 'btn-primary')} onClick=${() => togglePick(v)}>
+                  ${picks?.[name] === v.frets.join(',') ? 'いつもの形をやめる（やさしい形に戻す）' : 'いつもこの形で出す'}
+                </button>
+              </div>`
+            : null}`
         : null}
       ${v ? html`<p className="muted small center">上が1弦・下が6弦。数字は指（1=人差し指 … 4=小指、T=親指）。○は開放弦、×は鳴らさない弦。</p>` : html`<p className="muted center">この形の図は用意できませんでした。</p>`}
     </div>`;

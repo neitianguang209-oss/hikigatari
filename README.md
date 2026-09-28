@@ -12,6 +12,8 @@
 - 検索は曲名・アーティスト名をまとめて入れても、ひらがな・カタカナでもOK。同じ曲名の曲は歌ネットの人気順で並ぶ
 - **お気に入り**・最近ひらいた曲・曲ごとの設定（カポ/キー/テンポ/楽器）を、iPhone・iPad・PCで同期
 - **Apple Music** で聴いている曲を、iPhoneの「ショートカット」からワンタップで開ける
+- **練習の道具**: 区間リピート（行をタップ、または「サビ」などの見出しをタップで段落まるごと）、拍の点滅、コードごとに「いつもこの押さえ方」を覚える、**チューナー**（マイクで音の高さを測る・弦ごとの見本の音）、Apple Music で原曲を聴く
+- 最近の検索語、お気に入りの絞り込み、消した曲・外したお気に入りの「元に戻す」、印刷・PDF（操作ボタンを消して譜面だけ）
 - 自分で入力・貼り付けした譜面も使える（`[C]歌詞` 形式でも、コード行＋歌詞行の形式でもOK）
 - オフラインでも保存済みの曲は開ける
 
@@ -21,8 +23,10 @@
 
 1. 公開URLを **Safari** で開く → 共有ボタン → **ホーム画面に追加**
 2. 最初の端末で「はじめる」を押す（この端末が自分専用の鍵になる）
-3. ほかの端末は、使っている端末の **設定 → ほかの端末を追加** に出る6桁の数字でつなぐ
+3. ほかの端末は、使っている端末の **設定 → 端末と同期 →「つなぐための6桁の数字」** に出ている数字でつなぐ（数字はそこでいつでも確認・変更できる。5回続けてまちがえると15分つなげなくなる）
 4. Apple Music との連携はアプリ内の **設定 → Apple Music** の手順どおり（ショートカットは Safari で開くので、Safari でも一度つないでおく）
+
+PC・iPad のキーボードやフットペダル: スペース＝自動スクロールの開始/停止、↓ / PageDown＝次の行（止まっているときは画面送り）、↑ / PageUp＝前の行、→ ←＝BPM を2ずつ上げ下げ。
 
 ## 構成
 
@@ -30,14 +34,14 @@
 |---|---|
 | `index.html` / `styles.css` | React 18 + htm（CDN・ビルドなし） |
 | `src/music/` | コード解析・移調・キー判定（chord.js）、譜面の解析と貼り付け変換（sheet.js）、ギターの押さえ方探索・難しさ・カポ最適化・かんたんコード（guitar.js）、ピアノのボイシング（piano.js） |
-| `src/ui/` | 画面（home / song / editor / settings / welcome / apple）と自動スクロール（autoscroll.js） |
+| `src/ui/` | 画面（home / song / editor / settings / welcome / apple）、自動スクロール（autoscroll.js）、チューナー（tuner.js、YIN法で音の高さを測る） |
 | `src/lib/store.js` | 端末内の保存（IndexedDB）と同期。クラウドが空でも端末のデータは消さない |
 | `supabase/functions/hikigatari/index.ts` | Edge Function。サイト検索・譜面取り込み・端末の鍵・同期 |
 | `sw.js` | オフライン用。**更新して公開するたびに `CACHE_NAME` の番号を上げる** |
 
 ### Supabase（プロジェクト `gzayrjlhruhvklsidraw` に相乗り）
 
-- テーブル: `hikigatari_songs`（曲とお気に入り・設定）、`hikigatari_devices`（端末の鍵のハッシュ）、`hikigatari_pair_codes`（6桁コード）、`hikigatari_sheet_cache`（取り込みキャッシュ）
+- テーブル: `hikigatari_songs`（曲とお気に入り・設定）、`hikigatari_devices`（端末の鍵のハッシュ）、`hikigatari_pin`（つなぐための6桁の数字・まちがえた回数・ロック期限。1行だけ）、`hikigatari_pair_codes`（旧方式の使い捨てコード）、`hikigatari_sheet_cache`（取り込みキャッシュ）
 - どれも RLS 有効・ポリシーなし＝公開キーでは読めない。Edge Function（service role）だけが読み書きする
 - 変更があると `app_backups`（app=`hikigatari`）へ控えを送る。取り込んだ歌詞は控えに入れない（自分で入力した譜面だけ入れる）
 - Edge Function の更新: Supabase の MCP / ダッシュボードから `hikigatari` を再デプロイ（`verify_jwt: false`、認証は関数内の端末キーで行う）

@@ -1141,7 +1141,8 @@ textarea {
 .ln-label {
   padding-top: 0.7em;
 }
-.ln-label span {
+.ln-label span,
+.ln-label .label-btn {
   display: inline-block;
   font-size: 0.72em;
   font-weight: 800;
@@ -2048,4 +2049,452 @@ code {
 }
 .understood b {
   color: var(--text);
+}
+.pin-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------------------------------------------------------------- 仕上げ: 操作バー・区間リピート・拍の目印 */
+
+.chip small.chip-sub {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+/* スマホでは楽器の切り替えをアイコンだけにして、操作ボタンを1画面に収める */
+@media (max-width: 430px) {
+  .song-controls .seg-btn span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .song-controls .seg-btn {
+    padding: 0 11px;
+  }
+  .song-controls {
+    gap: 6px;
+  }
+  .song-controls .chip {
+    padding: 0 11px;
+  }
+}
+.panel-switch {
+  background: var(--bg);
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.ln.in-loop {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  border-radius: 0;
+}
+.ln.in-loop.loop-start {
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+.ln.in-loop.loop-end {
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+.ln.in-loop.is-current {
+  background: var(--hl);
+}
+.sheet-lines.is-selecting .ln-lyric,
+.sheet-lines.is-selecting .ln-chords {
+  cursor: pointer;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -2px;
+}
+.loop-banner {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(96px + env(safe-area-inset-bottom));
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 10px 10px 10px 16px;
+  border-radius: 14px;
+  background: #26211c;
+  color: #fff;
+  font-size: 0.88rem;
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 0.2s ease-out;
+}
+.loop-banner .btn {
+  flex: none;
+  background: #fff;
+  color: #26211c;
+  border: 0;
+}
+
+.beat-dots {
+  position: absolute;
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+.beat-dots.is-playing {
+  opacity: 1;
+}
+.beat-dots i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  transition: transform 0.08s, background 0.08s;
+}
+.beat-dots i.on {
+  background: var(--accent);
+  transform: scale(1.35);
+}
+.beat-dots i:first-child.on {
+  transform: scale(1.7);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.recent-q {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.chip.chip-sm {
+  height: 30px;
+  padding: 0 11px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.link-btn {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.fav-filter {
+  width: 100%;
+  height: 40px;
+  margin-bottom: 8px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.92rem;
+}
+.update-banner {
+  position: fixed;
+  left: 50%;
+  top: calc(10px + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  background: #26211c;
+  color: #fff;
+  font-size: 0.85rem;
+  box-shadow: var(--shadow-lg);
+  white-space: nowrap;
+}
+.update-banner .btn {
+  background: var(--accent);
+  border: 0;
+  color: #fff;
+}
+
+/* ---------------------------------------------------------------- 見出し(サビなど)のボタン */
+
+.ln-label .label-btn {
+  border: 0;
+  font-family: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.sheet-lines.is-selecting .ln-label .label-btn {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+.loop-banner small {
+  display: block;
+  margin-top: 2px;
+  opacity: 0.75;
+  font-size: 0.78rem;
+}
+
+/* ---------------------------------------------------------------- トーストの「元に戻す」 */
+
+.toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 8px 8px 16px;
+  pointer-events: auto;
+  text-align: left;
+}
+.toast-action {
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffb366;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.home-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ---------------------------------------------------------------- チューナー */
+
+.tuner {
+  padding: 2px 0 6px;
+}
+.tuner-gauge {
+  position: relative;
+  max-width: 320px;
+  margin: 0 auto;
+}
+.tuner-gauge svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.tg-arc {
+  fill: none;
+  stroke: var(--surface-3);
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+.tg-ok {
+  fill: none;
+  stroke: color-mix(in srgb, var(--good) 55%, transparent);
+  stroke-width: 10;
+}
+.tg-tick {
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.tg-needle {
+  transition: transform 0.12s ease-out;
+}
+.tg-needle line {
+  stroke: var(--muted);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.tg-needle circle {
+  fill: var(--muted);
+}
+.tuner-gauge.is-live .tg-needle line,
+.tuner-gauge.is-live .tg-needle circle {
+  stroke: var(--accent);
+  fill: var(--accent);
+}
+.tuner-gauge.is-ok .tg-needle line,
+.tuner-gauge.is-ok .tg-needle circle {
+  stroke: var(--good);
+  fill: var(--good);
+}
+.tuner-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+}
+.tuner-note b {
+  font: 800 2.9rem var(--chord-font);
+}
+.tuner-gauge.is-ok .tuner-note b {
+  color: var(--good);
+}
+.tuner-note span {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+.tuner-cents {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.tuner-guide {
+  text-align: center;
+  font-weight: 700;
+  margin: 6px 0 10px;
+  min-height: 1.4em;
+}
+.tuner-guide.is-ok {
+  color: var(--good);
+}
+.tuner-start {
+  text-align: center;
+  margin-bottom: 12px;
+}
+.tuner-start p {
+  margin: 10px auto 0;
+  max-width: 34em;
+}
+.tuner-strings {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.tuner-string {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 8px 0;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.tuner-string small {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+.tuner-string b {
+  font: 700 1.35rem var(--chord-font);
+}
+.tuner-string.is-target {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.tuner-string.is-hit {
+  background: var(--accent-soft);
+}
+.tuner-string.is-ok {
+  background: color-mix(in srgb, var(--good) 20%, var(--surface));
+  border-color: var(--good);
+}
+.tuner-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- 印刷(紙・PDF) */
+
+@media print {
+  :root,
+  :root:not([data-theme='light']),
+  :root[data-theme='dark'] {
+    --bg: #fff;
+    --surface: #fff;
+    --surface-2: #eee;
+    --text: #000;
+    --muted: #555;
+    --border: #ccc;
+    --accent: #c6441b;
+    --accent-strong: #c6441b;
+    --diagram: #000;
+    --hl: transparent;
+    color-scheme: light;
+  }
+  html,
+  body {
+    background: #fff !important;
+    color: #000;
+  }
+  .song {
+    height: auto;
+    overflow: visible;
+    display: block;
+  }
+  .song-body,
+  .sheet-scroll {
+    display: block;
+    overflow: visible;
+    height: auto;
+  }
+  .sheet-inner {
+    padding: 0 0 0;
+    max-width: none;
+  }
+  .song-top .icon-btn,
+  .song-controls,
+  .transport,
+  .strip-side,
+  .countdown,
+  .toast-host,
+  .update-banner,
+  .banner,
+  .loop-banner,
+  .sheet-layer,
+  .sheet-end {
+    display: none !important;
+  }
+  .song-top {
+    padding: 0 0 6px;
+    position: static;
+  }
+  .ln {
+    break-inside: avoid;
+  }
+  .ln.is-current,
+  .ln.in-loop {
+    background: none;
+    box-shadow: none;
+  }
+  .chord-name {
+    color: #000;
+  }
 }

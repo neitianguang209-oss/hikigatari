@@ -57,11 +57,16 @@ export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120,
   return html`<svg className=${'gdiagram' + (compact ? ' is-compact' : '')} width=${width} height=${(width * H) / W} viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="押さえ方の図">${parts}</svg>`;
 });
 
-export function GuitarChordCard({ name, label, onClick, active }) {
+// 「いつもこの押さえ方」で選んだ形(フレットを","でつないだ文字列)があればそれ、無ければいちばんやさしい形
+export function chosenVoicing(name, pick) {
   const vs = guitarVoicings(name);
+  return (pick && vs.find((v) => v.frets.join(',') === pick)) || vs[0];
+}
+
+export function GuitarChordCard({ name, label, onClick, active, pick }) {
   return html`<button className=${'chord-card' + (active ? ' is-active' : '')} onClick=${onClick}>
     <span className="chord-card-name">${label}</span>
-    <${GuitarDiagram} voicing=${vs[0]} width=${76} fingers=${false} compact=${true} />
+    <${GuitarDiagram} voicing=${chosenVoicing(name, pick)} width=${76} fingers=${false} compact=${true} />
   </button>`;
 }
 
