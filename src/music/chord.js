@@ -186,9 +186,11 @@ export function chordPcs(ch) {
 export function chordName(ch, shift = 0, flat = false) {
   if (!ch) return '';
   if (ch.special) return ch.special;
-  if (ch.bassOnly) return '/' + noteName(ch.bass + shift, flat);
-  const r = noteName(ch.root + shift, flat);
-  const b = ch.bass != null ? '/' + noteName(ch.bass + shift, flat) : '';
+  // 移調しないときは譜面に書いてあるとおりの表記(B♭ を A♯ にしない)
+  const nm = (pc, written) => (shift === 0 && written ? written : noteName(pc + shift, flat));
+  if (ch.bassOnly) return '/' + nm(ch.bass, ch.bassName);
+  const r = nm(ch.root, ch.rootName);
+  const b = ch.bass != null ? '/' + nm(ch.bass, ch.bassName) : '';
   return r + ch.suffix + b;
 }
 

@@ -67,6 +67,7 @@ export function Settings() {
       </${Row}>
       <${Switch} label="ギター: かんたんコード" hint="押さえにくいコードを、響きの近い押さえやすい形に置き換えます" checked=${p.simple} onChange=${(v) => set({ simple: v })} />
       <${Switch} label="ギター: 歌詞の上に押さえ方の図" checked=${p.inlineDiagrams} onChange=${(v) => set({ inlineDiagrams: v })} />
+      <${Switch} label="ピアノ: 歌詞の上に五線譜の図" hint="タップすると鍵盤の図が出ます" checked=${p.inlineStaff} onChange=${(v) => set({ inlineStaff: v })} />
       <${Row} label="ギター: カポの上限" hint="自動で選ぶカポ位置の上限">
         <${Segmented} size="sm" label="カポの上限" value=${p.maxCapo} onChange=${(v) => set({ maxCapo: v })} options=${[4, 5, 7, 9].map((n) => ({ value: n, label: String(n) }))} />
       </${Row}>

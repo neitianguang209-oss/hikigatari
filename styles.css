@@ -1768,7 +1768,7 @@ code {
   margin: 12px 0;
 }
 .pair-digits span {
-  width: 46px;
+  width: 44px;
   height: 60px;
   border-radius: 12px;
   background: var(--bg);
@@ -1972,15 +1972,18 @@ code {
 
 /* ---------------------------------------------------------------- 大きい画面(iPadを譜面台に置く・PC) */
 .mini-diagram svg {
-  width: 40px;
+  width: 52px;
   height: auto;
+}
+.mini-staff svg {
+  width: 44px;
 }
 @media (min-width: 700px) {
   :root {
     --base-fs: 20px;
   }
   .mini-diagram svg {
-    width: 48px;
+    width: 60px;
   }
   .transport {
     justify-content: center;
@@ -1994,4 +1997,48 @@ code {
 }
 .code-input::placeholder {
   color: var(--surface-3);
+}
+@media (min-width: 700px) {
+  .mini-staff svg {
+    width: 54px;
+  }
+}
+
+/* 五線譜(ピアノ) */
+.staff {
+  display: block;
+  overflow: visible;
+}
+.st-line {
+  stroke: var(--diagram);
+  stroke-width: 0.8;
+  opacity: 0.6;
+}
+.st-note {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.7;
+}
+.st-acc {
+  font: 700 10.5px var(--font);
+  fill: var(--text);
+}
+.chord-detail-staff {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 10px;
+  padding: 6px 0;
+  border-radius: 12px;
+  background: var(--bg);
+}
+.mini-staff {
+  margin-bottom: 1px;
+}
+.understood {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0 4px 10px;
+}
+.understood b {
+  color: var(--text);
 }

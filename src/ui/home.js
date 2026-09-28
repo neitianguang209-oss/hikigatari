@@ -208,15 +208,15 @@ export function Search({ q }) {
     if (!q) return;
     let alive = true;
     if (searchCache.has(q)) {
-      setState({ loading: false, error: null, groups: searchCache.get(q) });
+      setState({ loading: false, error: null, ...searchCache.get(q) });
       return;
     }
     setState({ loading: true, error: null, groups: [] });
     api('search', { q })
       .then((r) => {
         if (!alive) return;
-        searchCache.set(q, r.groups || []);
-        setState({ loading: false, error: null, groups: r.groups || [] });
+        searchCache.set(q, { groups: r.groups || [], understood: r.understood || null });
+        setState({ loading: false, error: null, groups: r.groups || [], understood: r.understood || null });
       })
       .catch((e) => alive && setState({ loading: false, error: e.message, groups: [] }));
     return () => {
@@ -235,7 +235,9 @@ export function Search({ q }) {
   }, [q, L.all().length]);
 
   const withSheets = state.groups.filter((g) => g.sources.length);
-  const without = state.groups.filter((g) => !g.sources.length);
+  // オルゴール・カラオケ・カバー集などは「譜面がまだ無い曲」にも出さない
+  const JUNK = /オルゴール|orgel|music box|originally performed|karaoke|カラオケ|instrumental|インスト|relax|ヒーリング|α波|cover|カバー/i;
+  const without = state.groups.filter((g) => !g.sources.length && !JUNK.test(g.title + ' ' + g.artist));
 
   return html`<div className="page search-page">
     <header className="search-top">
@@ -252,6 +254,7 @@ export function Search({ q }) {
 
     <section className="home-section">
       ${local.length ? html`<div className="section-head"><h2>見つかった譜面</h2></div>` : null}
+      ${!state.loading && state.understood ? html`<p className="understood">「<b>${state.understood}</b>」として探しました</p>` : null}
       ${state.loading
         ? html`<div className="search-loading">
             <${Spinner} label="U-FRET・ChordWiki・歌ネットを探しています…" />

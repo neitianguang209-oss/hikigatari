@@ -7,6 +7,7 @@ export const DEFAULT_PREFS = {
   instrument: 'guitar', // guitar | piano
   simple: true, // ギター: かんたんコード
   inlineDiagrams: true, // ギター: 歌詞の上に押さえ方の図
+  inlineStaff: true, // ピアノ: 歌詞の上に五線譜の図
   maxCapo: 7,
   noteStyle: 'solfege', // solfege(ドレミ) | letter(CDE)
   theme: 'auto', // auto | light | dark

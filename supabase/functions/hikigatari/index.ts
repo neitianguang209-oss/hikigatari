@@ -113,7 +113,7 @@ async function get(url: string, { mobile = false, timeout = 9000 } = {}) {
 
 // ---------------------------------------------------------------- U-FRET
 
-type Hit = { source: string; id: string; title: string; artist: string; badges?: string[]; url: string };
+type Hit = { source: string; id: string; title: string; artist: string; badges?: string[]; url: string; crown?: number };
 
 async function ufretSearch(q: string): Promise<Hit[]> {
   const html = await get('https://www.ufret.jp/search.php?key=' + encodeURIComponent(q), { mobile: true });
@@ -191,21 +191,24 @@ async function chordwikiSheet(title: string) {
 
 // ---------------------------------------------------------------- 歌ネット
 
+// sort=4 は歌ネットの「人気順」(歌詞の閲覧数)。同じ曲名の曲を人気順に並べる手がかりにもする
 async function utanetSearch(title: string): Promise<Hit[]> {
   const html = await get(
-    `https://www.uta-net.com/search/?Keyword=${encodeURIComponent(title)}&Aselect=2&Bselect=3`,
+    `https://www.uta-net.com/search/?Keyword=${encodeURIComponent(title)}&Aselect=2&Bselect=3&sort=4`,
   );
   const out: Hit[] = [];
   const re = /<a href="\/song\/(\d+)\/"[^>]*>\s*<span class="fw-bold songlist-title">([\s\S]*?)<\/span>([\s\S]*?)<\/a>/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html))) {
     const artist = m[3].match(/utaidashi">([\s\S]*?)<\/span>/)?.[1] ?? '';
+    const c = m[3].match(/crown_(million|platinum|gold)/)?.[1];
     out.push({
       source: 'utanet',
       id: m[1],
       title: stripTags(m[2]).trim(),
       artist: stripTags(artist).trim(),
       url: `https://www.uta-net.com/chord/${m[1]}/`,
+      crown: c === 'million' ? 3 : c === 'platinum' ? 2 : c === 'gold' ? 1 : 0,
     });
   }
   return out;
@@ -311,33 +314,135 @@ async function getSheet(source: string, id: string, title: string, artist: strin
   return r;
 }
 
+// ---------------------------------------------------------------- ひらがな・カタカナ入力の変換
+
+const KANA_RE = /^[ぁ-ゖァ-ヺー・゛゜]+$/;
+const toHira = (s: string) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+const toKata = (s: string) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+
+// 照合用: norm に加えてカタカナをひらがなにそろえる(「ハナタバ」と「はなたば」を同じに扱う)
+function fold(s: string) {
+  return toHira(norm(s));
+}
+
+const imeCache = new Map<string, string[]>();
+// Google日本語入力の変換候補(「はなたば」→「花束」、「ばっくなんばー」→「back number」)
+async function imeCandidates(word: string): Promise<string[]> {
+  const hira = toHira(word);
+  if (imeCache.has(hira)) return imeCache.get(hira)!;
+  try {
+    const r = await fetch(
+      `https://inputtools.google.com/request?text=${encodeURIComponent(hira)}&itc=ja-t-ja-hira-i0-und&num=6`,
+      { signal: AbortSignal.timeout(3000) },
+    );
+    const j = await r.json();
+    const list: string[] = j?.[0] === 'SUCCESS' ? j[1]?.[0]?.[1] ?? [] : [];
+    imeCache.set(hira, list);
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+type Word = { raw: string; forms: string[]; alts: string[] };
+
+// 検索語を単語に分け、かなの単語には漢字・英字の候補を足す
+async function understand(q: string): Promise<Word[]> {
+  const raws = q.split(' ').filter(Boolean).slice(0, 6);
+  return await Promise.all(
+    raws.map(async (raw) => {
+      const forms = new Set([raw, toHira(raw), toKata(raw)]);
+      let alts: string[] = [];
+      if (KANA_RE.test(raw) && raw.length >= 2) {
+        const cands = await imeCandidates(raw);
+        cands.forEach((c) => forms.add(c));
+        // 漢字・英字になっている候補を優先(かなのままの候補は照合用には残す)
+        alts = cands.filter((c) => !KANA_RE.test(c.replace(/\s/g, '')) && !/^[｡-ﾟ]+$/.test(c));
+        if (!alts.length && cands[0] && cands[0] !== raw) alts = [cands[0]];
+      }
+      return { raw, forms: [...forms].filter(Boolean), alts };
+    }),
+  );
+}
+
+function formHit(forms: string[], text: string) {
+  const t = fold(text);
+  if (!t) return false;
+  return forms.some((f) => {
+    const nf = fold(f);
+    return nf && (t.includes(nf) || (nf.length >= 4 && nf.includes(t) && t.length >= 3));
+  });
+}
+
 // ---------------------------------------------------------------- 横断検索
 
 async function search(qRaw: string) {
   const q = qRaw.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!q) return { groups: [] };
-  const ck = 'search:' + norm(q);
+  const ck = 'search2:' + fold(q);
   const cached = await cacheGet(ck, SEARCH_TTL_MS);
   if (cached) return cached;
 
-  const [ufR, itR] = await Promise.allSettled([ufretSearch(q), itunes(q)]);
-  let uf = ufR.status === 'fulfilled' ? ufR.value : [];
-  const cands = itR.status === 'fulfilled' ? itR.value : [];
+  // 1) 単語ごとの候補(かな→漢字・英字)と、U-FRET の素の検索を並行で
+  const [words, ufRaw] = await Promise.all([understand(q), ufretSearch(q).catch(() => [] as Hit[])]);
 
-  // 曲名だけで引くサイト(歌ネット/ChordWiki)には、iTunesで整えた曲名で当たる
+  // 2) iTunes は「そのまま」「変換後」「変換の第2候補」で引く(最大3回)
+  const itQueries = [q];
+  const conv = words.map((w) => w.alts[0] || w.raw).join(' ');
+  if (fold(conv) !== fold(q)) itQueries.push(conv);
+  const amb = words.findIndex((w) => w.alts.length >= 2);
+  if (amb >= 0) itQueries.push(words.map((w, i) => (i === amb ? w.alts[1] : w.alts[0] || w.raw)).join(' '));
+  const itLists = await Promise.all(itQueries.map((x) => itunes(x).catch(() => [] as Cand[])));
+
+  // 検索語の単語がいくつ曲名・アーティスト名に当たるか
+  const rel = (title: string, artist: string) => {
+    let matched = 0;
+    let inTitle = 0;
+    let exactTitle = false;
+    for (const w of words) {
+      const t = formHit(w.forms, title);
+      const a = formHit(w.forms, artist);
+      if (t || a) matched++;
+      if (t) inTitle++;
+      if (w.forms.some((f) => fold(f) === fold(baseTitle(title)))) exactTitle = true;
+    }
+    return { matched, all: matched === words.length, inTitle, exactTitle };
+  };
+
+  // iTunes の候補をまとめ、検索語によく当たるものを前に
+  const candMap = new Map<string, Cand & { order: number }>();
+  itLists.forEach((list, li) =>
+    list.forEach((c, i) => {
+      const k = fold(c.base) + '|' + fold(c.artist);
+      const order = li * 0.5 + i;
+      const cur = candMap.get(k);
+      if (!cur || cur.order > order) candMap.set(k, { ...c, order });
+    })
+  );
+  const cands = [...candMap.values()]
+    .map((c) => ({ c, r: rel(c.base, c.artist) }))
+    .sort((a, b) => Number(b.r.all) - Number(a.r.all) || b.r.matched - a.r.matched || a.c.order - b.c.order)
+    .map((x) => x.c);
+  const good = cands.filter((c) => rel(c.base, c.artist).all);
+
+  // 3) 曲名で引くサイト(歌ネット/ChordWiki)に当てる曲名
   const titles: string[] = [];
-  for (const c of cands.slice(0, 5)) if (!titles.some((t) => norm(t) === norm(c.base))) titles.push(c.base);
-  if (!titles.length) titles.push(baseTitle(q));
+  for (const c of (good.length ? good : cands).slice(0, 6)) if (!titles.some((t) => fold(t) === fold(c.base))) titles.push(c.base);
+  if (!titles.length) {
+    // iTunes で何も出ない曲: 変換後の語をそのまま曲名とみなす
+    const t = words.map((w) => w.alts[0] || w.raw).join(' ');
+    titles.push(baseTitle(t));
+  }
   const probeTitles = titles.slice(0, 3);
-  const candArtists = cands.slice(0, 8).map((c) => c.artist);
+  const candArtists = (good.length ? good : cands).slice(0, 8).map((c) => c.artist);
 
-  // U-FRETは「アイドル」のような短い語だと関係ない曲で上位が埋まるので、
-  // iTunesの上位候補については「曲名 アーティスト」でも引き直す
-  const ufExtraQueries = cands
+  // U-FRET: 上位候補は「曲名 アーティスト」でも引き直す(かなの入力や短い曲名で埋もれるのを防ぐ)
+  const ufQueries = (good.length ? good : cands)
     .slice(0, 2)
-    .filter((c) => !uf.some((h) => norm(baseTitle(h.title)) === norm(c.base) && sameArtist(h.artist, c.artist)))
+    .filter((c) => !ufRaw.some((h) => fold(baseTitle(h.title)) === fold(c.base) && sameArtist(h.artist, c.artist)))
     .map((c) => `${c.base} ${c.artist}`);
-  if (!cands.length && !uf.length && norm(probeTitles[0]) !== norm(q)) ufExtraQueries.push(probeTitles[0]);
+  if (fold(conv) !== fold(q)) ufQueries.push(conv);
+  if (!cands.length && !ufRaw.length && fold(probeTitles[0]) !== fold(q)) ufQueries.push(probeTitles[0]);
 
   const [unLists, cwList, ufExtra] = await Promise.all([
     Promise.all(probeTitles.map((t) => utanetSearch(t).catch(() => [] as Hit[]))),
@@ -348,19 +453,38 @@ async function search(qRaw: string) {
           .catch(() => null)
       ),
     ),
-    Promise.all(ufExtraQueries.map((x) => ufretSearch(x).catch(() => [] as Hit[]))),
+    Promise.all([...new Set(ufQueries)].slice(0, 3).map((x) => ufretSearch(x).catch(() => [] as Hit[]))),
   ]);
+  const uf = [...ufRaw];
   for (const list of ufExtra) for (const h of list) if (!uf.some((u) => u.id === h.id)) uf.push(h);
 
-  // 歌ネットは同名異曲が多いので、iTunesの候補アーティストに合うものだけ(候補が無ければ上位)を実際に開いて確かめる
+  // 人気度: 歌ネットの人気順リストでの順位(同じ曲名の中での並び)と、閲覧数の王冠
+  const pop = new Map<string, number>();
+  for (const list of unLists) {
+    list.forEach((h, i) => {
+      const k = fold(baseTitle(h.title)) + '|' + fold(h.artist);
+      const p = Math.max(0, 60 - i * 3) + [0, 8, 16, 26][h.crown ?? 0];
+      if (!pop.has(k) || pop.get(k)! < p) pop.set(k, p);
+    });
+  }
+  const popOf = (title: string, artist: string) => {
+    const t = fold(baseTitle(title));
+    for (const [k, v] of pop) {
+      const [kt, ka] = k.split('|');
+      if (kt === t && sameArtist(ka, artist)) return v;
+    }
+    return 0;
+  };
+
+  // 歌ネット: 候補アーティストに合うもの(無ければ人気上位)を実際に開いてコード譜の有無を確かめる
   const unHits: Hit[] = [];
   const unSeen = new Set<string>();
   for (const list of unLists) {
     const filtered = candArtists.length ? list.filter((h) => candArtists.some((a) => sameArtist(a, h.artist))) : list;
-    for (const h of filtered) if (!unSeen.has(h.id)) (unSeen.add(h.id), unHits.push(h));
+    for (const h of (filtered.length ? filtered : list).slice(0, 6)) if (!unSeen.has(h.id)) (unSeen.add(h.id), unHits.push(h));
   }
   const unChecked = await Promise.all(
-    unHits.slice(0, 5).map((h) =>
+    unHits.slice(0, 6).map((h) =>
       getSheet('utanet', h.id, h.title, h.artist, false, false)
         .then(() => h)
         .catch(() => null)
@@ -371,7 +495,7 @@ async function search(qRaw: string) {
   // deno-lint-ignore no-explicit-any
   const groups: any[] = [];
   const find = (title: string, artist: string) =>
-    groups.find((g) => norm(g.title) === norm(baseTitle(title)) && (sameArtist(g.artist, artist) || !g.artist || !artist));
+    groups.find((g) => fold(g.title) === fold(baseTitle(title)) && (sameArtist(g.artist, artist) || !g.artist || !artist));
   // deno-lint-ignore no-explicit-any
   const add = (title: string, artist: string, src: any) => {
     let g = find(title, artist);
@@ -382,10 +506,8 @@ async function search(qRaw: string) {
     if (!g.artist && artist) g.artist = artist;
     if (!g.sources.some((s: Hit) => s.source === src.source && s.id === src.id)) g.sources.push(src);
   };
-
-  // iTunesの並び(人気順)を優先して器を作る
-  for (const c of cands.slice(0, 10)) {
-    if (!groups.some((g) => norm(g.title) === norm(c.base) && sameArtist(g.artist, c.artist))) {
+  for (const c of cands.slice(0, 12)) {
+    if (!groups.some((g) => fold(g.title) === fold(c.base) && sameArtist(g.artist, c.artist))) {
       groups.push({ title: c.base, artist: c.artist, sources: [], artwork: c.artwork, appleId: c.appleId, durationMs: c.durationMs });
     }
   }
@@ -403,32 +525,27 @@ async function search(qRaw: string) {
     if (!h) continue;
     add(h.title, h.artist, { source: 'utanet', id: h.id, label: '', url: h.url });
   }
-
-  // ジャケット・曲の長さを付ける
   for (const g of groups) {
     if (g.artwork) continue;
-    const c = cands.find((c) => norm(c.base) === norm(g.title) && sameArtist(c.artist, g.artist));
+    const c = cands.find((c) => fold(c.base) === fold(g.title) && sameArtist(c.artist, g.artist));
     if (c) Object.assign(g, { artwork: c.artwork, appleId: c.appleId, durationMs: c.durationMs });
   }
 
-  // 並べ替え: iTunesの候補に一致(=実在の曲として有名) > 曲名が検索語と一致 > 曲名に含む > アーティスト一致
-  const nq = norm(q);
-  const words = q.split(' ').map(norm).filter(Boolean);
-  const score = (g: { title: string; artist: string; appleId?: number }, idx: number) => {
-    const nt = norm(g.title);
-    const na = norm(g.artist);
-    let s = 0;
-    const ci = cands.findIndex((c) => norm(c.base) === nt && sameArtist(c.artist, g.artist));
-    if (ci >= 0) s += 100 - ci * 3;
-    if (nt === nq || words.some((w) => w === nt)) s += 60;
-    else if (nt && (nq.includes(nt) || nt.includes(nq))) s += 30;
-    if (na && (nq.includes(na) || words.some((w) => w && na.includes(w)))) s += 25;
+  // ---- 並べ替え: 検索語に全部当たる曲 > 曲名が一致 > 人気(歌ネットの人気順・王冠) > iTunesの順
+  const score = (g: { title: string; artist: string }, idx: number) => {
+    const r = rel(g.title, g.artist);
+    let s = r.all ? 200 : r.matched * 40;
+    if (r.exactTitle) s += 50;
+    else if (r.inTitle) s += 20;
+    s += popOf(g.title, g.artist);
+    const ci = cands.findIndex((c) => fold(c.base) === fold(g.title) && sameArtist(c.artist, g.artist));
+    if (ci >= 0) s += Math.max(0, 24 - ci * 2);
     return s - idx * 0.01;
   };
   const ranked = groups.map((g, i) => ({ g, s: score(g, i) })).sort((a, b) => b.s - a.s).map((x) => x.g);
   const withSheets = ranked.filter((g) => g.sources.length).slice(0, 40);
-  const without = ranked.filter((g) => !g.sources.length).slice(0, 3);
-  const result = { q, groups: [...withSheets, ...without] };
+  const without = ranked.filter((g) => !g.sources.length && rel(g.title, g.artist).all).slice(0, 3);
+  const result = { q, groups: [...withSheets, ...without], understood: fold(conv) !== fold(q) ? conv : null };
   if (withSheets.length) await cachePut(ck, result);
   return result;
 }

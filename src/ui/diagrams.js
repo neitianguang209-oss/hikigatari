@@ -1,72 +1,129 @@
-// コードの図: ギターの押さえ方(SVG) / ピアノの鍵盤(SVG)
+// コードの図: ギターの押さえ方(横向き・SVG) / ピアノの五線譜(SVG) / ピアノの鍵盤(SVG)
 import React, { memo } from 'react';
 import htm from 'htm';
 import { guitarVoicings } from '../music/guitar.js';
+import { staffNotes } from '../music/piano.js';
 import { noteName, solfege } from '../music/chord.js';
 const html = htm.bind(React.createElement);
 
-// ---------------------------------------------------------------- ギター
+// ---------------------------------------------------------------- ギター(横向き)
+// 上が1弦・下が6弦、左端がナット。開放弦○とミュート×はナットの左に置く(U-FRET などと同じ向き)
 
-export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 96, fingers = true, compact = false }) {
+export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120, fingers = true, compact = false }) {
   if (!voicing) return html`<div className="gd-none" style=${{ width }}>図なし</div>`;
   const v = voicing;
   const W = 100;
-  const H = compact ? 104 : 118;
-  const left = compact ? 14 : 20;
-  const right = 8;
-  const top = compact ? 18 : 22;
-  const rows = compact ? 4 : 5;
-  const fretH = (H - top - 6) / rows;
-  const sx = (W - left - right) / 5;
-  const xs = [0, 1, 2, 3, 4, 5].map((i) => left + i * sx);
-  const start = v.maxF <= rows ? 1 : v.minF;
-  const r = compact ? 6.4 : 5.8;
-  const dotY = (f) => top + (f - start + 0.5) * fretH;
+  const H = compact ? 72 : 74;
+  const left = compact ? 15 : 14;
+  const right = 3;
+  const top = 5;
+  const bottom = compact ? 11 : 12;
+  const cols = compact ? 4 : 5;
+  const fretW = (W - left - right) / cols;
+  const gap = (H - top - bottom) / 5;
+  const start = v.maxF <= cols ? 1 : v.minF;
+  const yOf = (s) => top + (5 - s) * gap; // s: 0=6弦 … 5=1弦
+  const xOf = (f) => left + (f - start + 0.5) * fretW;
+  const r = compact ? 4.6 : 4.1;
   const parts = [];
-  // フレット・弦
-  for (let k = 0; k <= rows; k++) {
-    const y = top + k * fretH;
-    parts.push(html`<line key=${'f' + k} x1=${xs[0]} x2=${xs[5]} y1=${y} y2=${y} className=${k === 0 && start === 1 ? 'gd-nut' : 'gd-fret'} />`);
+  for (let k = 0; k <= cols; k++) {
+    const x = left + k * fretW;
+    parts.push(html`<line key=${'f' + k} x1=${x} x2=${x} y1=${yOf(5)} y2=${yOf(0)} className=${k === 0 && start === 1 ? 'gd-nut' : 'gd-fret'} />`);
   }
-  xs.forEach((x, i) => parts.push(html`<line key=${'s' + i} x1=${x} x2=${x} y1=${top} y2=${top + rows * fretH} className="gd-string" />`));
+  for (let s = 0; s < 6; s++) parts.push(html`<line key=${'s' + s} x1=${left} x2=${W - right} y1=${yOf(s)} y2=${yOf(s)} className="gd-string" />`);
   if (start > 1)
-    parts.push(html`<text key="fr" x=${left - (compact ? 3 : 5)} y=${dotY(start) + 3.5} className="gd-frlabel" textAnchor="end">${start}</text>`);
-  // 開放・ミュート
-  v.frets.forEach((f, i) => {
-    const y = top - (compact ? 8 : 9);
-    if (f === 0) parts.push(html`<circle key=${'o' + i} cx=${xs[i]} cy=${y} r=${compact ? 4 : 3.6} className="gd-open" />`);
-    else if (f < 0)
-      parts.push(html`<path key=${'x' + i} d=${`M${xs[i] - 3.4} ${y - 3.4}L${xs[i] + 3.4} ${y + 3.4}M${xs[i] + 3.4} ${y - 3.4}L${xs[i] - 3.4} ${y + 3.4}`} className="gd-mute" />`);
+    parts.push(html`<text key="fr" x=${xOf(start)} y=${H - 1.5} className="gd-frlabel" textAnchor="middle">${start}</text>`);
+  v.frets.forEach((f, s) => {
+    const x = left - (compact ? 7 : 6.5);
+    const y = yOf(s);
+    const m = compact ? 3.2 : 2.8;
+    if (f === 0) parts.push(html`<circle key=${'o' + s} cx=${x} cy=${y} r=${m} className="gd-open" />`);
+    else if (f < 0) parts.push(html`<path key=${'x' + s} d=${`M${x - m} ${y - m}L${x + m} ${y + m}M${x + m} ${y - m}L${x - m} ${y + m}`} className="gd-mute" />`);
   });
-  // セーハ
   if (v.barre) {
-    const y = dotY(v.barre.fret);
-    parts.push(html`<rect key="barre" x=${xs[v.barre.from] - r} y=${y - r} width=${xs[v.barre.to] - xs[v.barre.from] + r * 2} height=${r * 2} rx=${r} className="gd-dot" />`);
+    const x = xOf(v.barre.fret);
+    const y1 = yOf(v.barre.to);
+    const y2 = yOf(v.barre.from);
+    parts.push(html`<rect key="barre" x=${x - r} y=${y1 - r} width=${r * 2} height=${y2 - y1 + r * 2} rx=${r} className="gd-dot" />`);
   }
-  v.frets.forEach((f, i) => {
+  v.frets.forEach((f, s) => {
     if (f <= 0) return;
-    const inBarre = v.barre && f === v.barre.fret && i >= v.barre.from && i <= v.barre.to;
-    const fg = v.fingers[i];
-    if (!inBarre) parts.push(html`<circle key=${'d' + i} cx=${xs[i]} cy=${dotY(f)} r=${r} className="gd-dot" />`);
-    if (fingers && !compact && fg && (!inBarre || i === v.barre.from))
-      parts.push(html`<text key=${'n' + i} x=${xs[i]} y=${dotY(f) + 2.9} className="gd-finger" textAnchor="middle">${fg === 'T' ? 'T' : fg}</text>`);
+    const inBarre = v.barre && f === v.barre.fret && s >= v.barre.from && s <= v.barre.to;
+    if (!inBarre) parts.push(html`<circle key=${'d' + s} cx=${xOf(f)} cy=${yOf(s)} r=${r} className="gd-dot" />`);
+    const fg = v.fingers[s];
+    if (fingers && !compact && fg && (!inBarre || s === v.barre.to))
+      parts.push(html`<text key=${'n' + s} x=${xOf(f)} y=${yOf(s) + 2.5} className="gd-finger" textAnchor="middle">${fg}</text>`);
   });
   return html`<svg className=${'gdiagram' + (compact ? ' is-compact' : '')} width=${width} height=${(width * H) / W} viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="押さえ方の図">${parts}</svg>`;
 });
 
-export function GuitarChordCard({ name, label, onClick, active, index = 0 }) {
+export function GuitarChordCard({ name, label, onClick, active }) {
   const vs = guitarVoicings(name);
   return html`<button className=${'chord-card' + (active ? ' is-active' : '')} onClick=${onClick}>
     <span className="chord-card-name">${label}</span>
-    <${GuitarDiagram} voicing=${vs[index] || vs[0]} width=${64} fingers=${false} compact=${true} />
+    <${GuitarDiagram} voicing=${vs[0]} width=${76} fingers=${false} compact=${true} />
   </button>`;
 }
 
-// ---------------------------------------------------------------- ピアノ
+// ---------------------------------------------------------------- ピアノ(五線譜)
+// ト音記号の五線に、右手の和音を全音符で重ねて書く(臨時記号つき)
+
+const ACC = { 1: '♯', '-1': '♭', 2: '𝄪', '-2': '♭♭' };
+
+export const StaffDiagram = memo(function StaffDiagram({ name, width = 64, big = false }) {
+  const notes = staffNotes(name);
+  if (!notes) return html`<div className="gd-none" style=${{ width }}>—</div>`;
+  const W = 42;
+  const H = 44;
+  const topLine = 10;
+  const half = 3; // 線と間の1段ぶん
+  const bottomLine = topLine + half * 8; // E4
+  const yOf = (step) => bottomLine - (step - 30) * half;
+  const noteX = 26;
+  const parts = [];
+  for (let i = 0; i < 5; i++) parts.push(html`<line key=${'l' + i} x1=${1.5} x2=${W - 1.5} y1=${topLine + i * half * 2} y2=${topLine + i * half * 2} className="st-line" />`);
+  parts.push(html`<line key="bar" x1=${1.5} x2=${1.5} y1=${topLine} y2=${bottomLine} className="st-line" />`);
+  // 2度でぶつかる音は右にずらす
+  const sorted = [...notes].sort((a, b) => a.step - b.step);
+  let prev = null;
+  const placed = sorted.map((n) => {
+    const shift = prev && n.step - prev.step === 1 && !prev.shift;
+    const p = { ...n, x: noteX + (shift ? 7.2 : 0), shift };
+    prev = p;
+    return p;
+  });
+  // 加線
+  for (const n of placed) {
+    const lines = [];
+    if (n.step <= 28) for (let s = 28; s >= n.step; s -= 2) lines.push(s);
+    if (n.step >= 40) for (let s = 40; s <= n.step; s += 2) lines.push(s);
+    for (const s of lines) parts.push(html`<line key=${'lg' + n.step + '-' + s} x1=${n.x - 6} x2=${n.x + 6} y1=${yOf(s)} y2=${yOf(s)} className="st-line" />`);
+  }
+  // 臨時記号(近い音どうしは左にずらして重ならないように)
+  let accCol = 0;
+  let lastAccStep = -99;
+  for (const n of placed.filter((n) => n.acc).sort((a, b) => b.step - a.step)) {
+    accCol = lastAccStep - n.step < 6 ? accCol + 1 : 0;
+    lastAccStep = n.step;
+    parts.push(html`<text key=${'a' + n.step} x=${noteX - 9.5 - accCol * 6.5} y=${yOf(n.step) + 3.6} className="st-acc" textAnchor="middle">${ACC[n.acc] || ''}</text>`);
+  }
+  for (const n of placed)
+    parts.push(html`<ellipse key=${'n' + n.step} cx=${n.x} cy=${yOf(n.step)} rx="3.7" ry="2.7" transform=${`rotate(-18 ${n.x} ${yOf(n.step)})`} className="st-note" />`);
+  return html`<svg className=${'staff' + (big ? ' is-big' : '')} width=${width} height=${(width * H) / W} viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="五線譜の図">${parts}</svg>`;
+});
+
+export function PianoChordCard({ name, label, onClick }) {
+  return html`<button className="chord-card" onClick=${onClick}>
+    <span className="chord-card-name">${label}</span>
+    <${StaffDiagram} name=${name} width=${58} />
+  </button>`;
+}
+
+// ---------------------------------------------------------------- ピアノ(鍵盤)
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
 
-export const PianoKeyboard = memo(function PianoKeyboard({ right = [], left = null, from = 48, to = 83, noteStyle = 'solfege', flat = false }) {
+export const PianoKeyboard = memo(function PianoKeyboard({ right = [], left = null, from = 48, to = 83, noteStyle = 'solfege', flat = false, nameOf = null }) {
   const WW = 10;
   const WH = 48;
   const BW = 6.2;
@@ -83,7 +140,7 @@ export const PianoKeyboard = memo(function PianoKeyboard({ right = [], left = nu
   }
   const width = x;
   const rightSet = new Set(right);
-  const label = (m) => (noteStyle === 'letter' ? noteName(m, flat).replace('#', '♯').replace(/^([A-G])b/, '$1♭') : solfege(m, flat));
+  const label = (m) => (nameOf ? nameOf(m) : noteStyle === 'letter' ? noteName(m, flat).replace('#', '♯').replace(/^([A-G])b/, '$1♭') : solfege(m, flat));
   const cls = (m, base) => base + (rightSet.has(m) ? ' is-right' : left === m ? ' is-left' : '');
   return html`<svg className="keyboard" viewBox=${`-0.5 -0.5 ${width + 1} ${WH + 1}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="鍵盤の図">
     ${whites.map(

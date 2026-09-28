@@ -3,12 +3,12 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import htm from 'htm';
 import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
-import { GuitarDiagram, GuitarChordCard, PianoKeyboard } from './diagrams.js';
+import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard } from './diagrams.js';
 import { useAutoScroll } from './autoscroll.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
 import { rankCapos, shapeName, guitarVoicings, voicingDifficulty } from '../music/guitar.js';
-import { pianoVoicing } from '../music/piano.js';
+import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { lib, useSong } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
@@ -124,7 +124,9 @@ function SongReady({ song, reload }) {
   const instrument = st.instrument || prefs.instrument;
   const transpose = st.transpose || 0;
   const simple = st.simple ?? prefs.simple;
-  const inline = st.inline ?? prefs.inlineDiagrams;
+  // 歌詞の上の図: ギターは押さえ方、ピアノは五線譜。楽器ごとに出す/出さないを覚える
+  const inlineKey = instrument === 'guitar' ? 'inline' : 'inlineStaff';
+  const inline = instrument === 'guitar' ? st.inline ?? prefs.inlineDiagrams : st.inlineStaff ?? prefs.inlineStaff;
   const fontScale = st.fontScale ?? prefs.fontScale;
   const setSt = (patch) => lib.patchSettings(song.id, patch);
 
@@ -233,7 +235,7 @@ function SongReady({ song, reload }) {
   const capoLabel = instrument === 'guitar' ? (capo === 0 ? 'カポなし' : `カポ ${capo}`) : null;
   const flatForShape = keyPrefersFlat(shapeKey);
 
-  return html`<div className=${cx('song', 'is-' + instrument, inline && instrument === 'guitar' && 'has-inline')}>
+  return html`<div className=${cx('song', 'is-' + instrument, inline && 'has-inline')}>
     <${TopBar} song=${song} onMore=${() => setPanel('more')} />
     <div className="song-controls" role="toolbar" aria-label="表示の設定">
       <${Segmented}
@@ -250,8 +252,9 @@ function SongReady({ song, reload }) {
               ${capoLabel}${typeof st.capo !== 'number' ? html`<small>自動</small>` : null}
             </button>
             <button className=${cx('chip', simple && 'is-on')} aria-pressed=${simple} onClick=${() => setSt({ simple: !simple })}>かんたん</button>
-            <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ inline: !inline })}>図</button>`
+            `
         : null}
+      <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
       <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
         キー ${transpose === 0 ? '原曲' : (transpose > 0 ? '+' : '') + transpose}
       </button>
@@ -283,7 +286,7 @@ function SongReady({ song, reload }) {
             lines=${parsed.lines}
             display=${display}
             instrument=${instrument}
-            inline=${inline && instrument === 'guitar'}
+            inline=${inline}
             showBars=${prefs.showBars}
             onChord=${onChord}
             onLine=${onLineTap}
@@ -343,11 +346,11 @@ function SongReady({ song, reload }) {
 
 const SheetLines = memo(function SheetLines({ lines, display, instrument, inline, showBars, onChord, onLine }) {
   return html`<div className="sheet-lines">
-    ${lines.map((l, i) => html`<${Line} key=${i} i=${i} line=${l} display=${display} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} />`)}
+    ${lines.map((l, i) => html`<${Line} key=${i} i=${i} line=${l} display=${display} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} />`)}
   </div>`;
 });
 
-const Line = memo(function Line({ line, i, display, inline, showBars, onChord, onLine }) {
+const Line = memo(function Line({ line, i, display, instrument, inline, showBars, onChord, onLine }) {
   if (line.type === 'blank') return html`<div className="ln ln-blank" data-i=${i}></div>`;
   if (line.type === 'label') return html`<div className="ln ln-label" data-i=${i}><span>${line.text}</span></div>`;
   if (line.type === 'comment') return html`<div className="ln ln-comment" data-i=${i}>${line.text}</div>`;
@@ -361,7 +364,7 @@ const Line = memo(function Line({ line, i, display, inline, showBars, onChord, o
               ${s.bar && showBars ? html`<i className="bar" aria-hidden="true"></i>` : null}
               ${s.c
                 ? html`<button className="chord" onClick=${(e) => { e.stopPropagation(); onChord(s.c); }}>
-                    ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} />` : null}
+                    ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} instrument=${instrument} />` : null}
                     <span className="chord-name"><${ChordText} name=${pretty(name)} /></span>
                   </button>`
                 : html`<span className="chord-space"> </span>`}
@@ -383,9 +386,10 @@ export function SheetPreview({ lines }) {
   return html`<div className="sheet-inner preview"><${SheetLines} lines=${lines} display=${display} instrument="piano" inline=${false} showBars=${true} onChord=${() => {}} onLine=${() => {}} /></div>`;
 }
 
-const MiniDiagram = memo(function MiniDiagram({ name }) {
+const MiniDiagram = memo(function MiniDiagram({ name, instrument }) {
+  if (instrument === 'piano') return html`<span className="mini-diagram mini-staff"><${StaffDiagram} name=${name} width=${46} /></span>`;
   const v = guitarVoicings(name)[0];
-  return html`<span className="mini-diagram"><${GuitarDiagram} voicing=${v} width=${40} fingers=${false} compact=${true} /></span>`;
+  return html`<span className="mini-diagram"><${GuitarDiagram} voicing=${v} width=${52} fingers=${false} compact=${true} /></span>`;
 });
 
 function ChordStrip({ names, instrument, onTap, vertical = false }) {
@@ -394,8 +398,8 @@ function ChordStrip({ names, instrument, onTap, vertical = false }) {
     return html`<div className=${cx('chord-strip', vertical && 'is-vertical')}>
       ${names.map((n) => html`<${GuitarChordCard} key=${n} name=${n} label=${html`<${ChordText} name=${pretty(n)} />`} onClick=${() => onTap(n)} />`)}
     </div>`;
-  return html`<div className=${cx('chord-strip chip-strip', vertical && 'is-vertical')}>
-    ${names.map((n) => html`<button key=${n} className="chord-chip" onClick=${() => onTap(n)}><${ChordText} name=${pretty(n)} /></button>`)}
+  return html`<div className=${cx('chord-strip', vertical && 'is-vertical')}>
+    ${names.map((n) => html`<${PianoChordCard} key=${n} name=${n} label=${html`<${ChordText} name=${pretty(n)} />`} onClick=${() => onTap(n)} />`)}
   </div>`;
 }
 
@@ -562,7 +566,7 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
     const vs = guitarVoicings(name);
     const v = vs[idx % Math.max(1, vs.length)];
     body = html`<div className="chord-detail">
-      <div className="chord-detail-diagram"><${GuitarDiagram} voicing=${v} width=${170} /></div>
+      <div className="chord-detail-diagram"><${GuitarDiagram} voicing=${v} width=${250} /></div>
       ${vs.length > 1
         ? html`<div className="row-gap center voicing-nav">
             <button className="btn" onClick=${() => setIdx((idx - 1 + vs.length) % vs.length)} aria-label="前の押さえ方"><${Icon} name="back" /></button>
@@ -573,16 +577,19 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
             <button className="btn" onClick=${() => setIdx((idx + 1) % vs.length)} aria-label="次の押さえ方"><${Icon} name="back" className="rot-180" /></button>
           </div>`
         : null}
-      ${v ? html`<p className="muted small center">数字は指（1=人差し指 … 4=小指、T=親指）。○は開放弦、×は鳴らさない弦。</p>` : html`<p className="muted center">この形の図は用意できませんでした。</p>`}
+      ${v ? html`<p className="muted small center">上が1弦・下が6弦。数字は指（1=人差し指 … 4=小指、T=親指）。○は開放弦、×は鳴らさない弦。</p>` : html`<p className="muted center">この形の図は用意できませんでした。</p>`}
     </div>`;
   } else if (name) {
     const pv = pianoVoicing(name, idx);
     const ch = parseChord(name);
-    const notes = pv ? pv.right.map((m) => (noteStyle === 'letter' ? pretty(noteName(m, flat)) : solfege(m, flat))) : [];
-    const bassName = pv ? (noteStyle === 'letter' ? pretty(noteName(pv.left, flat)) : solfege(pv.left, flat)) : '';
+    const spelled = spelledNamer(name, noteStyle);
+    const nameOf = (m) => (spelled && spelled(m)) || (noteStyle === 'letter' ? pretty(noteName(m, flat)) : solfege(m, flat));
+    const notes = pv ? pv.right.map(nameOf) : [];
+    const bassName = pv ? nameOf(pv.left) : '';
     body = html`<div className="chord-detail">
       ${pv
-        ? html`<${PianoKeyboard} right=${pv.right} left=${pv.left} noteStyle=${noteStyle} flat=${flat} />
+        ? html`<div className="chord-detail-staff"><${StaffDiagram} name=${name} width=${120} big=${true} /></div>
+            <${PianoKeyboard} right=${pv.right} left=${pv.left} noteStyle=${noteStyle} flat=${flat} nameOf=${nameOf} />
             <div className="piano-legend">
               <div><span className="dot dot-right"></span>右手 <b>${notes.join('・')}</b></div>
               <div><span className="dot dot-left"></span>左手 <b>${bassName}</b>${ch && ch.bass != null ? '（分数コードの下の音）' : '（ルート）'}</div>
