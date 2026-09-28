@@ -1,7 +1,7 @@
 // ひきがたり Service Worker(オフラインでもアプリを開けるように)
 // アプリを更新してデプロイするたびに、CACHE_NAME の番号を必ず上げる。
 // 上げないとブラウザが sw.js の変更を検知できず、古い画面を配信し続ける。
-const CACHE_NAME = 'hikigatari-v5';
+const CACHE_NAME = 'hikigatari-v6';
 const RUNTIME = 'hikigatari-runtime';
 
 const APP_SHELL = [
@@ -41,7 +41,13 @@ const INDEX_URL = new URL('./index.html', self.registration.scope).toString();
 const RUNTIME_HOSTS = ['esm.sh', 'fonts.googleapis.com', 'fonts.gstatic.com', 'is1-ssl.mzstatic.com', 'is2-ssl.mzstatic.com', 'is3-ssl.mzstatic.com', 'is4-ssl.mzstatic.com', 'is5-ssl.mzstatic.com'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' でブラウザの一時キャッシュを通さず、公開したばかりのファイルを必ず取りに行く
+  event.waitUntil(
+    caches
+      .open(CACHE_NAME)
+      .then((c) => c.addAll(APP_SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener('activate', (event) => {

@@ -125,14 +125,29 @@ function Tuner() {
     r.stream?.getTracks().forEach((t) => t.stop());
     r.ctx?.close?.().catch?.(() => {});
   };
-  useEffect(() => stop, []);
+  const alive = useRef(true);
+  useEffect(
+    () => () => {
+      alive.current = false;
+      stop();
+    },
+    [],
+  );
 
   const start = async () => {
     setStatus('starting');
+    // iPhone は「押した瞬間」に作った音の部品しか動かないので、マイクの許可を待つ前に作っておく
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx.resume?.().catch?.(() => {});
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if (ctx.state === 'suspended') await ctx.resume();
+      // 許可を待つあいだに閉じられていたら、マイクをすぐ止める
+      if (!alive.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        ctx.close?.().catch?.(() => {});
+        return;
+      }
+      if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
       const src = ctx.createMediaStreamSource(stream);
       const an = ctx.createAnalyser();
       an.fftSize = 4096;
@@ -173,6 +188,7 @@ function Tuner() {
       rt.current = { stream, ctx, timer };
       setStatus('on');
     } catch (e) {
+      ctx.close?.().catch?.(() => {});
       setStatus(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'denied' : 'error');
     }
   };
