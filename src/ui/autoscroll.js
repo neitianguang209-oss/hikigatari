@@ -3,11 +3,32 @@
 // 途中で指やホイールで動かすと一時停止し、手を離したところから続きを刻む。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+// 小節線の無い行の長さ(小節数)の見積もり。
+// ChordWiki の小節線つき譜面(10曲・333行)で、コード数と歌詞の音数から実際の小節数を当てはめた式。
+// 「1行=2小節」決め打ちだと平均1.3小節ずれていたのが、約0.6小節に縮む。
+export function estimateBars(line) {
+  if (line.type === 'chords') return Math.min(8, Math.max(1, Math.round(0.4 * line.chordCount + 1)));
+  const est = 0.267 * (line.chordCount || 0) + 0.056 * (line.mora || 0) + 1.05;
+  return Math.min(8, Math.max(1, Math.round(est)));
+}
+
+// barsPerLine: 0 = 自動で見積もる / 1〜4 = その小節数に固定
 export function lineBeats(line, barsPerLine, bpb) {
   if (line.type !== 'lyric' && line.type !== 'chords') return 0;
   if (line.bars) return line.bars * bpb;
-  if (line.type === 'chords') return Math.min(8, Math.max(1, line.chordCount)) * bpb; // イントロ等: 1コード=1小節
+  if (!barsPerLine) return estimateBars(line) * bpb;
+  if (line.type === 'chords') return Math.min(8, Math.max(1, line.chordCount)) * bpb;
   return barsPerLine * bpb;
+}
+
+// 譜面全体を曲の実際の長さに合わせるための倍率(時間の伸び縮み)。合わせないときは 1
+export function songFit(totalBeats, bpm, durationMs) {
+  if (!durationMs || !bpm || !totalBeats) return null;
+  const est = (totalBeats * 60) / bpm;
+  const ratio = durationMs / 1000 / est;
+  // 譜面に抜けている部分がある等で大きくずれるときは、無理に合わせない
+  if (ratio < 0.6 || ratio > 1.7) return { ratio, usable: false };
+  return { ratio, usable: true };
 }
 
 let audioCtx = null;
@@ -34,13 +55,12 @@ export function unlockAudio() {
   } catch {}
 }
 
-export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click }) {
+export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong }) {
   const [playing, setPlaying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
-  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0 }).current;
+  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0 }).current;
   const live = useRef({});
-  live.current = { bpm, click, countIn, beatsPerBar };
 
   const tl = useMemo(() => {
     const starts = [];
@@ -57,6 +77,11 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     return { starts, durs, total: t, timed };
   }, [lines, barsPerLine, beatsPerBar]);
   s.tl = tl; // requestAnimationFrame のループからも常に最新の時間軸を見る
+
+  // 曲の長さに合わせる: 譜面の拍を進める速さだけを変える(クリック音は本来のBPMのまま)
+  const fit = useMemo(() => songFit(tl.total, bpm, durationMs), [tl.total, bpm, durationMs]);
+  const scrollRate = fitSong && fit && fit.usable ? 1 / fit.ratio : 1;
+  live.current = { bpm, click, countIn, beatsPerBar, scrollRate };
 
   const measure = useCallback(() => {
     const el = scrollRef.current;
@@ -146,8 +171,13 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     let dt = s.last ? (ts - s.last) / 1000 : 0;
     if (dt > 2) dt = 0;
     s.last = ts;
-    const { bpm: B, click: C, beatsPerBar: bpb } = live.current;
-    if (!s.holding) s.beat += (dt * B) / 60;
+    const { bpm: B, click: C, beatsPerBar: bpb, scrollRate } = live.current;
+    const counting = s.countEnd != null && s.beat < s.countEnd;
+    // 譜面は「曲の長さに合わせた速さ」で、カウントとクリックは本来のBPMで進める
+    if (!s.holding) {
+      s.beat += ((dt * B) / 60) * (counting ? 1 : scrollRate);
+      s.clickPhase += (dt * B) / 60;
+    }
     let eff = s.beat;
     if (s.countEnd != null) {
       if (s.beat < s.countEnd) {
@@ -163,8 +193,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         setCountdown(0);
       }
     }
-    // メトロノーム(カウント中は必ず鳴らす)
-    const whole = Math.floor(s.beat + 1e-6);
+    // メトロノーム(カウント中は必ず鳴らす)。譜面の伸び縮みとは別に、本来のBPMで刻む
+    const whole = Math.floor(s.clickPhase + 1e-6);
     if (whole !== s.lastInt) {
       s.lastInt = whole;
       if (!s.holding && (C || s.countEnd != null)) clickSound(((whole % bpb) + bpb) % bpb === 0);
@@ -196,7 +226,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       s.beat = s.startBeat;
       s.countEnd = null;
     }
-    s.lastInt = Math.floor(s.beat) - 1;
+    s.clickPhase = ci ? -bpb : 0;
+    s.lastInt = Math.floor(s.clickPhase) - 1;
     s.last = 0;
     s.holding = false;
     s.playingFlag = true;
@@ -286,5 +317,5 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     cancelAnimationFrame(s.raf);
   }, []);
 
-  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total };
+  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, fit, scrollRate };
 }

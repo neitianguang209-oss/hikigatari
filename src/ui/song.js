@@ -1,5 +1,5 @@
 // 曲の画面: 譜面表示・楽器切り替え・カポ/キー/テンポ・自動スクロール・コード図
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
@@ -13,7 +13,7 @@ import { lib, useSong } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, sourceName } from '../lib/util.js';
+import { cx, sourceName, norm, baseTitle, sameArtist } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- 入口: 譜面の読み込み
@@ -181,10 +181,37 @@ function SongReady({ song, reload }) {
   const bpm = st.bpm || song.sheet.bpm || 90;
   const bpmKnown = !!(st.bpm || song.sheet.bpm);
   const hasBars = parsed.lines.some((l) => l.bars);
-  const barsPerLine = st.barsPerLine || prefs.barsPerLine;
+  const barsPerLine = st.barsPerLine ?? prefs.barsPerLine; // 0 = 自動で見積もる
+  const fitSong = st.fitSong ?? true;
   const beatsPerBar = song.sheet.beatsPerBar || parsed.meta.beatsPerBar || 4;
 
-  const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click });
+  const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click, durationMs: song.durationMs, fitSong });
+
+  // 曲の長さ(自動スクロールを曲に合わせるのに使う)が分からない曲は、Apple の曲データから一度だけ探す
+  useEffect(() => {
+    if (song.durationMs || song.durationTried || !song.title) return;
+    let alive = true;
+    (async () => {
+      try {
+        const q = `${baseTitle(song.title)} ${song.artist || ''}`.trim();
+        const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=jp&entity=song&limit=10&lang=ja_jp`);
+        const j = await r.json();
+        const hit = (j.results || []).find(
+          (x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist)),
+        );
+        if (!alive) return;
+        await lib.patch(
+          song.id,
+          hit
+            ? { durationMs: hit.trackTimeMillis, appleId: song.appleId || hit.trackId, artwork: song.artwork || hit.artworkUrl100, durationTried: true }
+            : { durationTried: true },
+        );
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [song.id]);
 
   // 画面を消さない(演奏中に暗くならないように)
   useEffect(() => {
@@ -327,6 +354,9 @@ function SongReady({ song, reload }) {
       hasBars=${hasBars}
       barsPerLine=${barsPerLine}
       custom=${!!st.bpm}
+      fit=${scroll.fit}
+      fitSong=${fitSong}
+      durationMs=${song.durationMs}
     />
     <${TextPanel} open=${panel === 'text'} onClose=${() => setPanel(null)} fontScale=${fontScale} setSt=${setSt} />
     <${MorePanel} open=${panel === 'more'} onClose=${() => setPanel(null)} song=${song} reload=${reload} />
@@ -344,8 +374,64 @@ function SongReady({ song, reload }) {
 
 // ---------------------------------------------------------------- 譜面の行
 
+// 1行は折り返さずに1行のまま見せる。はみ出す行だけ文字と図を少し縮め、縮めすぎになる行だけ折り返す
+const FIT_MIN = { lyric: 0.72, chords: 0.5 };
+
+function fitLines(root) {
+  if (!root) return;
+  const els = [...root.querySelectorAll('.ln-lyric, .ln-chords')];
+  // まず全部を元の大きさに戻してから測る(書き込み→読み取り→書き込みの順でまとめて行う)
+  for (const el of els) {
+    el.style.removeProperty('--fit');
+    el.style.removeProperty('grid-template-columns');
+    el.classList.remove('is-wrap', 'is-grid');
+  }
+  const pad = els.length ? parseFloat(getComputedStyle(els[0]).paddingLeft) * 2 : 0;
+  const sizes = els.map((el) => [el, el.scrollWidth - pad, el.clientWidth - pad]);
+  const grids = [];
+  for (const [el, need, have] of sizes) {
+    if (need <= have + 1) continue;
+    const r = Math.floor((have / need) * 1000) / 1000 - 0.005;
+    const chords = el.classList.contains('ln-chords');
+    if (r >= (chords ? FIT_MIN.chords : FIT_MIN.lyric)) el.style.setProperty('--fit', r);
+    else if (chords) {
+      // コードだけの行がどうしても1行に入らないときは、段ごとの数をそろえて折る(9個なら 5+4。4+4+1 にしない)
+      const n = el.children.length;
+      const rows = Math.max(2, Math.ceil((need * 0.8) / have));
+      el.classList.add('is-grid');
+      el.style.gridTemplateColumns = `repeat(${Math.ceil(n / rows)}, max-content)`;
+      grids.push(el);
+    } else el.classList.add('is-wrap');
+  }
+  // そろえて折った行も、まだはみ出すなら少しだけ縮める
+  for (const el of grids) {
+    const need = el.scrollWidth - pad;
+    const have = el.clientWidth - pad;
+    if (need > have + 1) el.style.setProperty('--fit', Math.max(0.6, Math.floor((have / need) * 1000) / 1000 - 0.005));
+  }
+}
+
 const SheetLines = memo(function SheetLines({ lines, display, instrument, inline, showBars, onChord, onLine }) {
-  return html`<div className="sheet-lines">
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    fitLines(ref.current);
+  }, [lines, display, instrument, inline, showBars]);
+  // 画面の幅や文字の大きさが変わったら測り直す(高さだけの変化では測り直さない)
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let last = '';
+    const ro = new ResizeObserver(() => {
+      const key = el.clientWidth + '|' + getComputedStyle(el).fontSize;
+      if (key === last) return;
+      last = key;
+      fitLines(el);
+    });
+    ro.observe(el);
+    if (document.fonts?.ready) document.fonts.ready.then(() => fitLines(el));
+    return () => ro.disconnect();
+  }, []);
+  return html`<div className="sheet-lines" ref=${ref}>
     ${lines.map((l, i) => html`<${Line} key=${i} i=${i} line=${l} display=${display} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} />`)}
   </div>`;
 });
@@ -464,7 +550,9 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument }) {
   </${Sheet}>`;
 }
 
-function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom }) {
+const mmss = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
+
+function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs }) {
   const taps = useRef([]);
   const tap = () => {
     const now = performance.now();
@@ -488,6 +576,22 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
       <button className="btn" onClick=${() => setSt({ bpm: Math.min(300, bpm * 2) })}>×2</button>
     </div>
     ${custom && origBpm ? html`<div className="row-gap center"><button className="btn btn-ghost" onClick=${() => setSt({ bpm: null })}>元のテンポ（${origBpm}）に戻す</button></div>` : null}
+    <div className="panel-field">
+      <${Switch}
+        label=${durationMs ? `曲の長さ（${mmss(durationMs)}）に合わせる` : '曲の長さに合わせる'}
+        hint=${!durationMs
+          ? 'この曲は長さが分からないので、BPMどおりに進みます'
+          : !fit
+            ? ''
+            : !fit.usable
+              ? '譜面と曲の長さが離れすぎているので、BPMどおりに進みます'
+              : fitSong
+                ? `譜面がちょうど曲の長さで終わるよう、${fit.ratio > 1 ? 'ゆっくり' : '速め'}に進めています（×${(1 / fit.ratio).toFixed(2)}）。クリック音は元のBPMのまま`
+                : 'オフ: BPMと小節の数どおりに進みます'}
+        checked=${fitSong && !!fit?.usable}
+        onChange=${(v) => setSt({ fitSong: v })}
+      />
+    </div>
     ${hasBars
       ? html`<p className="panel-note">この譜面には小節線があるので、小節どおりに進みます。</p>`
       : html`<div className="panel-field">
@@ -496,9 +600,9 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
             label="歌詞1行の長さ"
             value=${barsPerLine}
             onChange=${(v) => setSt({ barsPerLine: v })}
-            options=${[1, 2, 3, 4].map((n) => ({ value: n, label: `${n}小節` }))}
+            options=${[{ value: 0, label: '自動' }, ...[1, 2, 3, 4].map((n) => ({ value: n, label: `${n}小節` }))]}
           />
-          <p className="panel-note">速さが合わないときは、ここで1行の長さを変えるとぴったりになります。演奏中に行をタップするとそこへ飛びます。</p>
+          <p className="panel-note">「自動」は、コードの数と歌詞の長さから行ごとに小節数を見積もります。ずれるときは演奏中に行をタップするとそこへ飛びます。</p>
         </div>`}
   </${Sheet}>`;
 }

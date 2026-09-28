@@ -16,6 +16,7 @@ export function baseTitle(t) {
     s = next;
   }
   s = s.replace(/\s+[([【].*$/, '').replace(/\s+-\s+.*$/, '');
+  s = s.replace(/\s+(feat\.?|ft\.|featuring)\s*\S.*$/i, ''); // 「すずめ feat.十明」→「すずめ」(Left などの語の中は消さない)
   s = s.replace(/\s*(弾き語り|ピアノ|piano|バンド|アコギ|アコースティック|acoustic|ギター|guitar|簡単|初心者|tv|full|short|ショート)?\s*(ver\.?|version|バージョン)\s*$/i, '');
   s = s.replace(/\s+/g, ' ').trim();
   return s || (t || '').trim();

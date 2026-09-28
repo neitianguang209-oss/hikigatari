@@ -6,6 +6,18 @@ const LABEL_RE =
 
 const SYMBOL_ONLY = /^[\s　>\-=○●・.\/*~^_:;＞－ー]*$/;
 
+// 歌詞のおおよその音の数(拍の長さの見積もりに使う)。小さい「ゃゅょ」は数えず、漢字は約1.7音
+export function moraCount(text) {
+  let m = 0;
+  for (const c of text || '') {
+    if (/[ぁ-ゖァ-ヺ]/.test(c)) m += /[ゃゅょャュョぁぃぅぇぉァィゥェォ]/.test(c) ? 0 : 1;
+    else if (c === 'ー') m += 1;
+    else if (/[一-鿿々]/.test(c)) m += 1.7;
+    else if (/[A-Za-z]/.test(c)) m += 0.4;
+  }
+  return m;
+}
+
 // ChordWiki のふりがな「心(ここ[Bm]ろ)」を外して、コードを漢字の前後に寄せる
 function stripRuby(line) {
   return line.replace(
@@ -98,14 +110,14 @@ function parseBody(line, chorus) {
   }
   if (!hasChord) {
     if (LABEL_RE.test(plain)) return { type: 'label', text: plain.trim().replace(/^[【\[(（<＜《]\s*|\s*[】\])）>＞》]$/g, ''), chorus };
-    return { type: 'lyric', segs: [{ c: null, t: plain, bar: false }], bars, chorus, chordCount: 0 };
+    return { type: 'lyric', segs: [{ c: null, t: plain, bar: false }], bars, chorus, chordCount: 0, mora: moraCount(plain) };
   }
   if (!hasText) {
     // コードだけの行(イントロ・間奏など)。リズム用のハイフンは落とす
     const only = segs.filter((s) => s.c).map((s) => ({ c: s.c, t: '', bar: s.bar }));
     return { type: 'chords', segs: only, bars, chorus, chordCount: only.length };
   }
-  return { type: 'lyric', segs, bars, chorus, chordCount: segs.filter((s) => s.c).length };
+  return { type: 'lyric', segs, bars, chorus, chordCount: segs.filter((s) => s.c).length, mora: moraCount(plain) };
 }
 
 export function parseSheet(text) {

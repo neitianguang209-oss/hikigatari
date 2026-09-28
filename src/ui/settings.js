@@ -77,8 +77,8 @@ export function Settings() {
     </${Section}>
 
     <${Section} title="自動スクロール">
-      <${Row} label="歌詞1行の長さ（標準）" hint="小節線の無い譜面で使います。曲ごとにも変えられます">
-        <${Segmented} size="sm" label="歌詞1行の長さ" value=${p.barsPerLine} onChange=${(v) => set({ barsPerLine: v })} options=${[1, 2, 3, 4].map((n) => ({ value: n, label: `${n}小節` }))} />
+      <${Row} label="歌詞1行の長さ（標準）" hint="小節線の無い譜面で使います。「自動」はコードの数と歌詞の長さから見積もります">
+        <${Segmented} size="sm" label="歌詞1行の長さ" value=${p.barsPerLine} onChange=${(v) => set({ barsPerLine: v })} options=${[{ value: 0, label: "自動" }, ...[1, 2, 3, 4].map((n) => ({ value: n, label: `${n}小節` }))]} />
       </${Row}>
       <${Switch} label="スタート前に1小節カウント" checked=${p.countIn} onChange=${(v) => set({ countIn: v })} />
       <${Switch} label="クリック音（メトロノーム）" hint="曲ごとにも切り替えられます" checked=${p.click} onChange=${(v) => set({ click: v })} />

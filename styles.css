@@ -1109,12 +1109,27 @@ textarea {
 }
 .ln {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-end;
   padding: 3px 8px;
   margin: 0 -8px;
   border-radius: 10px;
   transition: background 0.35s;
+  font-size: calc(1em * var(--fit, 1));
+}
+.ln.is-wrap {
+  flex-wrap: wrap;
+}
+.ln.is-grid {
+  display: grid;
+  row-gap: 4px;
+  justify-content: start;
+}
+.ln:not(.is-wrap) > .seg {
+  flex: none;
+}
+.ln:not(.is-wrap) .ly {
+  white-space: pre;
 }
 .ln.is-current {
   background: var(--hl);
@@ -1768,7 +1783,7 @@ code {
   margin: 12px 0;
 }
 .pair-digits span {
-  width: 44px;
+  width: 2.6em;
   height: 60px;
   border-radius: 12px;
   background: var(--bg);
@@ -1972,18 +1987,15 @@ code {
 
 /* ---------------------------------------------------------------- 大きい画面(iPadを譜面台に置く・PC) */
 .mini-diagram svg {
-  width: 52px;
+  width: 3.05em;
   height: auto;
 }
 .mini-staff svg {
-  width: 44px;
+  width: 2.6em;
 }
 @media (min-width: 700px) {
   :root {
     --base-fs: 20px;
-  }
-  .mini-diagram svg {
-    width: 60px;
   }
   .transport {
     justify-content: center;
@@ -1997,11 +2009,6 @@ code {
 }
 .code-input::placeholder {
   color: var(--surface-3);
-}
-@media (min-width: 700px) {
-  .mini-staff svg {
-    width: 54px;
-  }
 }
 
 /* 五線譜(ピアノ) */

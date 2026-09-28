@@ -86,6 +86,7 @@ function baseTitle(t: string) {
   }
   s = s.replace(/\s+[(\[【].*$/, ''); // 閉じていない括弧以降
   s = s.replace(/\s+-\s+.*$/, '');
+  s = s.replace(/\s+(feat\.?|ft\.|featuring)\s*\S.*$/i, ''); // 「すずめ feat.十明」→「すずめ」(Left などの語の中は消さない)
   s = s.replace(
     /\s*(弾き語り|ピアノ|piano|バンド|アコギ|アコースティック|acoustic|ギター|guitar|簡単|初心者|tv|full|short|ショート)?\s*(ver\.?|version|バージョン)\s*$/i,
     '',
@@ -191,10 +192,16 @@ async function chordwikiSheet(title: string) {
 
 // ---------------------------------------------------------------- 歌ネット
 
-// sort=4 は歌ネットの「人気順」(歌詞の閲覧数)。同じ曲名の曲を人気順に並べる手がかりにもする
+// sort=4 は歌ネットの「人気順」(歌詞の閲覧数)。同じ曲名の曲を人気順に並べる手がかりにもする。
+// Bselect=4(曲名が完全に一致)で探し、無ければ部分一致(Bselect=3)で探し直す
 async function utanetSearch(title: string): Promise<Hit[]> {
+  const exact = await utanetList(title, 4);
+  return exact.length ? exact : await utanetList(title, 3);
+}
+
+async function utanetList(title: string, bselect: number): Promise<Hit[]> {
   const html = await get(
-    `https://www.uta-net.com/search/?Keyword=${encodeURIComponent(title)}&Aselect=2&Bselect=3&sort=4`,
+    `https://www.uta-net.com/search/?Keyword=${encodeURIComponent(title)}&Aselect=2&Bselect=${bselect}&sort=4`,
   );
   const out: Hit[] = [];
   const re = /<a href="\/song\/(\d+)\/"[^>]*>\s*<span class="fw-bold songlist-title">([\s\S]*?)<\/span>([\s\S]*?)<\/a>/g;
@@ -276,6 +283,14 @@ async function cachePut(key: string, data: unknown) {
   await db.from('hikigatari_sheet_cache').upsert({ key, data, fetched_at: new Date().toISOString() });
 }
 
+// 応答を待たせずに裏で走らせ切る(キャッシュの書き込みなど)
+function bg(p: Promise<unknown>) {
+  const q = p.catch(() => {});
+  // deno-lint-ignore no-explicit-any
+  const rt = (globalThis as any).EdgeRuntime;
+  if (rt?.waitUntil) rt.waitUntil(q);
+}
+
 // ---------------------------------------------------------------- 譜面の取得
 
 async function bpmFromUfret(title: string, artist: string) {
@@ -310,7 +325,7 @@ async function getSheet(source: string, id: string, title: string, artist: strin
   r.source = source;
   r.sourceId = id;
   r.fetchedAt = new Date().toISOString();
-  await cachePut(ck, r);
+  bg(cachePut(ck, r));
   return r;
 }
 
@@ -379,20 +394,41 @@ function formHit(forms: string[], text: string) {
 async function search(qRaw: string) {
   const q = qRaw.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!q) return { groups: [] };
-  const ck = 'search2:' + fold(q);
+  const ck = 'search3:' + fold(q);
   const cached = await cacheGet(ck, SEARCH_TTL_MS);
   if (cached) return cached;
 
-  // 1) 単語ごとの候補(かな→漢字・英字)と、U-FRET の素の検索を並行で
+  // 曲名で引くサイトの問い合わせは同じ曲名で2度しないよう覚えておく(先に始めた分をあとで使い回す)
+  const unMemo = new Map<string, Promise<Hit[]>>();
+  const unFor = (t: string) => {
+    if (!unMemo.has(t)) unMemo.set(t, utanetSearch(t).catch(() => [] as Hit[]));
+    return unMemo.get(t)!;
+  };
+  // deno-lint-ignore no-explicit-any
+  const cwMemo = new Map<string, Promise<any>>();
+  const cwFor = (t: string) => {
+    if (!cwMemo.has(t)) {
+      cwMemo.set(t, getSheet('chordwiki', t, t, '', false, false).then((s) => ({ t, s })).catch(() => null));
+    }
+    return cwMemo.get(t)!;
+  };
+  // 1語で、かなだけではない検索語(「花束」「Lemon」など)は、そのまま曲名とみなして先に引き始める
+  if (!q.includes(' ') && !KANA_RE.test(q)) {
+    unFor(q);
+    cwFor(q);
+  }
+
+  // 1) 単語ごとの候補(かな→漢字・英字)・U-FRET・iTunes(そのまま)を同時に引く
+  const itRawP = itunes(q).catch(() => [] as Cand[]);
   const [words, ufRaw] = await Promise.all([understand(q), ufretSearch(q).catch(() => [] as Hit[])]);
 
-  // 2) iTunes は「そのまま」「変換後」「変換の第2候補」で引く(最大3回)
-  const itQueries = [q];
+  // 2) かなを変換したときだけ、iTunes を「変換後」「変換の第2候補」でも引く
+  const itQueries: string[] = [];
   const conv = words.map((w) => w.alts[0] || w.raw).join(' ');
   if (fold(conv) !== fold(q)) itQueries.push(conv);
   const amb = words.findIndex((w) => w.alts.length >= 2);
   if (amb >= 0) itQueries.push(words.map((w, i) => (i === amb ? w.alts[1] : w.alts[0] || w.raw)).join(' '));
-  const itLists = await Promise.all(itQueries.map((x) => itunes(x).catch(() => [] as Cand[])));
+  const itLists = await Promise.all([itRawP, ...itQueries.map((x) => itunes(x).catch(() => [] as Cand[]))]);
 
   // 検索語の単語がいくつ曲名・アーティスト名に当たるか
   const rel = (title: string, artist: string) => {
@@ -445,14 +481,8 @@ async function search(qRaw: string) {
   if (!cands.length && !ufRaw.length && fold(probeTitles[0]) !== fold(q)) ufQueries.push(probeTitles[0]);
 
   const [unLists, cwList, ufExtra] = await Promise.all([
-    Promise.all(probeTitles.map((t) => utanetSearch(t).catch(() => [] as Hit[]))),
-    Promise.all(
-      probeTitles.map((t) =>
-        getSheet('chordwiki', t, t, '', false, false)
-          .then((s) => ({ t, s }))
-          .catch(() => null)
-      ),
-    ),
+    Promise.all(probeTitles.map(unFor)),
+    Promise.all(probeTitles.map(cwFor)),
     Promise.all([...new Set(ufQueries)].slice(0, 3).map((x) => ufretSearch(x).catch(() => [] as Hit[]))),
   ]);
   const uf = [...ufRaw];
@@ -484,7 +514,7 @@ async function search(qRaw: string) {
     for (const h of (filtered.length ? filtered : list).slice(0, 6)) if (!unSeen.has(h.id)) (unSeen.add(h.id), unHits.push(h));
   }
   const unChecked = await Promise.all(
-    unHits.slice(0, 6).map((h) =>
+    unHits.slice(0, 4).map((h) =>
       getSheet('utanet', h.id, h.title, h.artist, false, false)
         .then(() => h)
         .catch(() => null)
@@ -534,7 +564,8 @@ async function search(qRaw: string) {
   // ---- 並べ替え: 検索語に全部当たる曲 > 曲名が一致 > 人気(歌ネットの人気順・王冠) > iTunesの順
   const score = (g: { title: string; artist: string }, idx: number) => {
     const r = rel(g.title, g.artist);
-    let s = r.all ? 200 : r.matched * 40;
+    // 検索語に当たる語が1つ多いほうが、人気だけの曲より必ず上(1語=100点 > 人気の最大86+24点)
+    let s = r.all ? 300 : r.matched * 100;
     if (r.exactTitle) s += 50;
     else if (r.inTitle) s += 20;
     s += popOf(g.title, g.artist);
@@ -546,7 +577,7 @@ async function search(qRaw: string) {
   const withSheets = ranked.filter((g) => g.sources.length).slice(0, 40);
   const without = ranked.filter((g) => !g.sources.length && rel(g.title, g.artist).all).slice(0, 3);
   const result = { q, groups: [...withSheets, ...without], understood: fold(conv) !== fold(q) ? conv : null };
-  if (withSheets.length) await cachePut(ck, result);
+  if (withSheets.length) bg(cachePut(ck, result));
   return result;
 }
 
