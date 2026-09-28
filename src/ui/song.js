@@ -14,7 +14,7 @@ import { lib, useSong } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, sourceName, norm, baseTitle, sameArtist } from '../lib/util.js';
+import { cx, sourceName, norm, baseTitle, sameArtist, signed } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- 入口: 譜面の読み込み
@@ -179,8 +179,9 @@ function SongReady({ song, reload }) {
   // ベース音だけの指定(/G# など)は一覧に出さない
   const uniqueDisplay = useMemo(() => [...new Set(stats.order.map((c) => display.get(c)))].filter((n) => /^[A-G]/.test(n)), [stats, display]);
 
-  const bpm = st.bpm || song.sheet.bpm || 90;
-  const bpmKnown = !!(st.bpm || song.sheet.bpm);
+  const sheetBpm = song.sheet.bpm || parsed.meta.bpm || null; // 譜面に書かれたテンポ({tempo} など)
+  const bpm = st.bpm || sheetBpm || 90;
+  const bpmKnown = !!(st.bpm || sheetBpm);
   const hasBars = parsed.lines.some((l) => l.bars);
   const barsPerLine = st.barsPerLine ?? prefs.barsPerLine; // 0 = 自動で見積もる
   const fitSong = st.fitSong ?? true;
@@ -330,7 +331,7 @@ function SongReady({ song, reload }) {
         : null}
       <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
       <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
-        キー ${transpose === 0 ? '原曲' : (transpose > 0 ? '+' : '') + transpose}
+        キー ${transpose === 0 ? '原曲' : signed(transpose)}
       </button>
     </div>
 
@@ -392,7 +393,7 @@ function SongReady({ song, reload }) {
         </div>`
       : null}
 
-    ${scroll.countdown ? html`<div className="countdown" aria-live="assertive">${scroll.countdown}</div>` : null}
+    ${scroll.countdown ? html`<div className="countdown" aria-live="assertive"><span key=${scroll.countdown}>${scroll.countdown}</span></div>` : null}
 
     <${Transport}
       scroll=${scroll}
@@ -412,7 +413,7 @@ function SongReady({ song, reload }) {
       open=${panel === 'tempo'}
       onClose=${() => setPanel(null)}
       bpm=${bpm}
-      origBpm=${song.sheet.bpm}
+      origBpm=${sheetBpm}
       setSt=${setSt}
       hasBars=${hasBars}
       barsPerLine=${barsPerLine}
@@ -524,10 +525,13 @@ const SheetLines = memo(function SheetLines({ lines, display, instrument, inline
   </div>`;
 });
 
+// サビの見出しは少し目立たせる
+const SABI_RE = /サビ|chorus|ｻﾋﾞ/i;
+
 const Line = memo(function Line({ line, i, display, instrument, inline, showBars, onChord, onLine, onLabel, selecting, picks, loopMark }) {
   if (line.type === 'blank') return html`<div className="ln ln-blank" data-i=${i}></div>`;
   if (line.type === 'label')
-    return html`<div className=${cx('ln ln-label', loopMark)} data-i=${i}>
+    return html`<div className=${cx('ln ln-label', SABI_RE.test(line.text) && 'is-sabi', loopMark)} data-i=${i}>
       ${onLabel ? html`<button className="label-btn" onClick=${() => onLabel(i)}>${line.text}</button>` : html`<span>${line.text}</span>`}
     </div>`;
   if (line.type === 'comment') return html`<div className="ln ln-comment" data-i=${i}>${line.text}</div>`;
@@ -639,9 +643,9 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument }) {
     <p className="panel-lead">自分の声に合わせて曲全体の高さを変えます。${instrument === 'guitar' ? 'ギターのカポ位置も自動で選び直します。' : ''}</p>
     <div className="key-big">
       <div className="key-now">${keyName(origKey, transpose)}</div>
-      <div className="muted small">原曲 ${keyName(origKey)} から ${transpose === 0 ? '変更なし' : (transpose > 0 ? '+' : '') + transpose}（半音）</div>
+      <div className="muted small">原曲 ${keyName(origKey)} から ${transpose === 0 ? '変更なし' : signed(transpose)}（半音）</div>
     </div>
-    <${Stepper} label="キー" value=${transpose} min=${-6} max=${6} onChange=${(v) => setSt({ transpose: v })} format=${(v) => (v === 0 ? '原曲' : (v > 0 ? '+' : '') + v)} />
+    <${Stepper} label="キー" value=${transpose} min=${-6} max=${6} onChange=${(v) => setSt({ transpose: v })} format=${(v) => (v === 0 ? '原曲' : signed(v))} />
     <div className="row-gap center">
       <button className="btn" disabled=${transpose === 0} onClick=${() => setSt({ transpose: 0 })}>原曲キーに戻す</button>
     </div>
@@ -850,7 +854,7 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
     </div>`;
   }
   const title = name ? pretty(name) : '';
-  return html`<${Sheet} open=${!!tap} onClose=${onClose} title=${title}>
+  return html`<${Sheet} open=${!!tap} onClose=${onClose} title=${title} heading=${name ? html`<span className="sheet-chord-title"><${ChordText} name=${title} /></span>` : null}>
     ${instrument === 'guitar' && snd && snd !== name ? html`<p className="panel-note center">実際に鳴る音は <b>${pretty(snd)}</b></p>` : null}
     ${body}
   </${Sheet}>`;

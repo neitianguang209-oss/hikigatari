@@ -7,7 +7,8 @@ const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- シート(下から出るパネル)
 
-export function Sheet({ open, onClose, title, children, wide = false }) {
+// heading を渡すと見出しに使う(title は読み上げ用の文字)
+export function Sheet({ open, onClose, title, heading = null, children, wide = false }) {
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
   useEffect(() => {
@@ -31,7 +32,7 @@ export function Sheet({ open, onClose, title, children, wide = false }) {
     <div className=${cx('sheet', wide && 'sheet-wide')} role="dialog" aria-modal="true" aria-label=${title} onClick=${(e) => e.stopPropagation()}>
       <div className="sheet-grip" aria-hidden="true"></div>
       <div className="sheet-head">
-        <h2>${title}</h2>
+        <h2>${heading || title}</h2>
         <button className="icon-btn" onClick=${onClose} aria-label="閉じる"><${Icon} name="close" /></button>
       </div>
       <div className="sheet-body">${children}</div>

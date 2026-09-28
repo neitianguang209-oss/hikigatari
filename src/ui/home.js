@@ -7,7 +7,7 @@ import { lib, useLibrary, useSyncState } from '../lib/store.js';
 import { api, lookupAppleMusic } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist } from '../lib/util.js';
+import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed } from '../lib/util.js';
 import { TunerSheet } from './tuner.js';
 const html = htm.bind(React.createElement);
 
@@ -74,8 +74,8 @@ function SongRow({ song, onOpen }) {
   const st = song.settings || {};
   const bits = [];
   if (st.instrument === 'piano') bits.push('ピアノ');
-  if (typeof st.capo === 'number') bits.push(st.capo ? `カポ${st.capo}` : 'カポなし');
-  if (st.transpose) bits.push(`キー${st.transpose > 0 ? '+' : ''}${st.transpose}`);
+  if (typeof st.capo === 'number') bits.push(st.capo ? `カポ ${st.capo}` : 'カポなし');
+  if (st.transpose) bits.push(`キー ${signed(st.transpose)}`);
   return html`<li className="song-row">
     <button className="song-row-main" onClick=${onOpen}>
       <${Artwork} song=${song} size=${48} />
@@ -171,9 +171,12 @@ export function Home() {
 
     <${SearchBox} onSubmit=${(q) => go('/search?q=' + encodeURIComponent(q))} />
     ${recentQ.length
-      ? html`<div className="recent-q" aria-label="最近の検索">
-          ${recentQ.map((q) => html`<button key=${q} className="chip chip-sm" onClick=${() => go('/search?q=' + encodeURIComponent(q))}>${q}</button>`)}
-          <button className="link-btn" onClick=${() => { saveRecentQueries([]); setRecentQ([]); }}>消す</button>
+      ? html`<div className="recent-q" role="group" aria-label="最近の検索">
+          <span className="recent-q-icon" aria-hidden="true"><${Icon} name="clock" size=${15} /></span>
+          <div className="recent-q-list">
+            ${recentQ.map((q) => html`<button key=${q} className="chip chip-sm" onClick=${() => go('/search?q=' + encodeURIComponent(q))}>${q}</button>`)}
+          </div>
+          <button className="icon-btn recent-q-clear" onClick=${() => { saveRecentQueries([]); setRecentQ([]); }} aria-label="最近の検索を消す" title="最近の検索を消す"><${Icon} name="close" size=${15} /></button>
         </div>`
       : null}
 
@@ -217,7 +220,7 @@ export function Home() {
 
     ${recent.length
       ? html`<section className="home-section">
-          <div className="section-head"><h2>最近ひらいた曲</h2></div>
+          <div className="section-head"><h2><${Icon} name="clock" size=${17} className="icon-muted" /> 最近ひらいた曲</h2></div>
           <ul className="song-list">${recent.map((s) => html`<${SongRow} key=${s.id} song=${s} onOpen=${() => go('/song/' + s.id)} />`)}</ul>
         </section>`
       : null}

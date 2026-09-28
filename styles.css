@@ -717,6 +717,9 @@ textarea {
 .section-head h2 .icon {
   color: #f2b01e;
 }
+.section-head h2 .icon.icon-muted {
+  color: var(--muted);
+}
 .count {
   font-size: 0.8rem;
   color: var(--muted);
@@ -1133,6 +1136,7 @@ textarea {
 }
 .ln.is-current {
   background: var(--hl);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .ln-blank {
   height: 0.9em;
@@ -1157,8 +1161,28 @@ textarea {
   color: var(--muted);
   line-height: 1.5;
 }
+/* サビ({soc}〜{eoc})は左に1本の線でつなげて見せる(行ごとに角を丸めない) */
 .ln.is-chorus {
-  box-shadow: inset 3px 0 0 var(--accent-soft);
+  position: relative;
+  border-radius: 0 10px 10px 0;
+}
+.ln.is-chorus::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.ln.is-chorus.in-loop::before,
+.ln.is-chorus.is-current::before {
+  display: none;
+}
+.ln-label.is-sabi span,
+.ln-label.is-sabi .label-btn {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 .seg {
   display: inline-flex;
@@ -1318,11 +1342,11 @@ textarea {
   fill: var(--accent-2);
 }
 .kb-label {
-  font: 700 4.4px var(--font);
+  font: 700 4.6px var(--font);
   fill: #fff;
 }
 .kb-label-b {
-  font-size: 3.2px;
+  font-size: 3.5px;
 }
 .kb-c4 {
   fill: var(--kb-line);
@@ -1446,9 +1470,21 @@ textarea {
   justify-content: center;
   pointer-events: none;
   z-index: 60;
-  font: 700 7rem/1 var(--chord-font);
+  font: 700 6rem/1 var(--chord-font);
   color: var(--accent);
-  text-shadow: 0 4px 30px var(--bg);
+}
+.countdown span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6em;
+  height: 1.6em;
+  padding-top: 0.06em;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25), inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
   animation: count-pop 0.3s ease-out;
 }
 @keyframes count-pop {
@@ -1498,12 +1534,15 @@ textarea {
   color: var(--chord);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  -webkit-mask-image: linear-gradient(to right, #000 78%, transparent);
+  mask-image: linear-gradient(to right, #000 78%, transparent);
 }
 .capo-row:first-of-type .capo-shapes {
   font: 0.85rem var(--font);
   color: var(--muted);
   white-space: normal;
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 .capo-ease {
   height: 8px;
@@ -2183,10 +2222,38 @@ code {
 
 .recent-q {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   margin-top: 10px;
+}
+.recent-q-icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--muted);
+  padding: 0 2px 0 4px;
+}
+.recent-q-list {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px 16px 2px 2px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+}
+.recent-q-list::-webkit-scrollbar {
+  display: none;
+}
+.recent-q-list .chip.chip-sm {
+  max-width: 13em;
+}
+.icon-btn.recent-q-clear {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
 }
 .chip.chip-sm {
   height: 30px;
@@ -2496,5 +2563,92 @@ code {
   }
   .chord-name {
     color: #000;
+  }
+}
+
+/* ---------------------------------------------------------------- 仕上げ: 読みやすさ・横向き・細部 */
+
+/* 日本語の文を、単語の途中で折り返さない・最後の行に1文字だけ残さない(対応ブラウザのみ) */
+p,
+li,
+small,
+.panel-lead,
+.panel-note,
+.empty-body,
+.switch-text small {
+  text-wrap: pretty;
+  word-break: auto-phrase;
+}
+.nw {
+  white-space: nowrap;
+}
+
+/* 横にスクロールできるコード一覧は、右端をぼかして続きがあると分かるように */
+.strip-top .chord-strip {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+
+/* コードの説明パネルの見出し */
+.sheet-chord-title {
+  font: 700 1.5rem/1 var(--chord-font);
+  color: var(--chord);
+  letter-spacing: 0.01em;
+}
+
+/* PC: スクロールバーを細く目立たなく */
+html,
+.sheet-scroll,
+.strip-side,
+.sheet-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+
+/* iPhone の横向き(画面の上下が狭い): 上のバーを1段にまとめ、再生バーを薄くして譜面を広く */
+@media (orientation: landscape) and (max-height: 520px) {
+  :root {
+    --base-fs: 18px;
+  }
+  .song {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .song-top {
+    grid-column: 1;
+    grid-row: 1;
+    padding: calc(2px + env(safe-area-inset-top)) 4px 2px calc(6px + env(safe-area-inset-left));
+  }
+  .song-controls {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    border-bottom: 0;
+    padding: 4px calc(12px + env(safe-area-inset-right)) 4px 4px;
+  }
+  .song-body {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    border-top: 1px solid var(--border);
+  }
+  .transport {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    padding-top: 5px;
+    padding-bottom: calc(5px + env(safe-area-inset-bottom));
+    justify-content: center;
+    gap: 26px;
+  }
+  .play-btn {
+    width: 50px;
+    height: 50px;
+  }
+  .sheet-inner {
+    padding-left: max(18px, env(safe-area-inset-left));
+    padding-right: max(18px, env(safe-area-inset-right));
+  }
+  .song-head {
+    margin-bottom: 8px;
   }
 }

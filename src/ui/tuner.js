@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon } from './icons.js';
 import { Sheet } from './common.js';
-import { cx } from '../lib/util.js';
+import { cx, signed } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
 // 6弦 → 1弦(標準チューニング)
@@ -234,7 +234,7 @@ function Tuner() {
         <b>${reading ? NOTE[pc] : '–'}</b>
         <span>${reading ? `${DO[pc]}${reading.string ? ` ・ ${reading.string}弦` : ''}` : status === 'on' ? '聞いています…' : ''}</span>
       </div>
-      <div className="tuner-cents">${reading ? `${cents > 0 ? '+' : ''}${cents} セント ・ ${reading.freq.toFixed(1)} Hz` : ' '}</div>
+      <div className="tuner-cents">${reading ? `${signed(cents)} セント ・ ${reading.freq.toFixed(1)} Hz` : ' '}</div>
     </div>
     <p className=${cx('tuner-guide', ok && 'is-ok')} aria-live="polite">${guide || ' '}</p>
 

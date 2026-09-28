@@ -115,3 +115,8 @@ export function downloadFile(name, text, type = 'application/json') {
     a.remove();
   }, 1000);
 }
+
+// 符号つきの数(+2 / −1)。マイナスは長音「ー」と見分けやすい数学記号にする
+export function signed(n) {
+  return n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : '0';
+}

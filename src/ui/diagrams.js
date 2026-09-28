@@ -128,7 +128,15 @@ export function PianoChordCard({ name, label, onClick }) {
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
 
-export const PianoKeyboard = memo(function PianoKeyboard({ right = [], left = null, from = 48, to = 83, noteStyle = 'solfege', flat = false, nameOf = null }) {
+export const PianoKeyboard = memo(function PianoKeyboard({ right = [], left = null, from = null, to = null, noteStyle = 'solfege', flat = false, nameOf = null }) {
+  // 使う音が入るオクターブだけを出す(最低2オクターブ)。鍵盤を大きく、音名を読みやすくするため
+  if (from == null || to == null) {
+    const used = [...right, ...(left != null ? [left] : [])];
+    const lo = used.length ? Math.min(...used) : 48;
+    const hi = used.length ? Math.max(...used) : 71;
+    from = Math.floor(lo / 12) * 12;
+    to = Math.max(from + 23, Math.ceil((hi + 1) / 12) * 12 - 1);
+  }
   const WW = 10;
   const WH = 48;
   const BW = 6.2;
