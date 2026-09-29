@@ -9,6 +9,10 @@ import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
 import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed } from '../lib/util.js';
 import { TunerSheet } from './tuner.js';
+import { checkWatched } from '../lib/watch.js';
+
+const earLink = (g) =>
+  `/ear?title=${encodeURIComponent(baseTitle(g.title || ''))}&artist=${encodeURIComponent(g.artist || '')}${g.appleId ? `&appleId=${g.appleId}` : ''}`;
 const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- 最近の検索語(この端末だけ)
@@ -152,6 +156,11 @@ export function Home() {
   );
   const [recentQ, setRecentQ] = useState(loadRecentQueries);
   const [tuner, setTuner] = useState(false);
+  // 耳コピの下書きしか無い曲に、サイトの譜面が出ていないか調べる
+  useEffect(() => {
+    checkWatched();
+  }, []);
+  const found = songs.filter((s) => s.source === 'ear' && s.watchFound);
   // お気に入りが増えてきたら絞り込み欄を出す
   const [filter, setFilter] = useState('');
   const shownFavs = useMemo(() => {
@@ -179,6 +188,13 @@ export function Home() {
           <button className="icon-btn recent-q-clear" onClick=${() => { saveRecentQueries([]); setRecentQ([]); }} aria-label="最近の検索を消す" title="最近の検索を消す"><${Icon} name="close" size=${15} /></button>
         </div>`
       : null}
+
+    ${found.map(
+      (s) => html`<button key=${s.id} className="watch-card" onClick=${() => go('/song/' + s.id)}>
+        <${Icon} name="music" />
+        <span><b>「${s.title}」の譜面が出ました</b><small>${sourceName(s.sources?.[0]?.source)} に載りました。タップして切り替えられます</small></span>
+      </button>`,
+    )}
 
     ${!prefs.appleCardDismissed
       ? html`<div className="apple-card">
@@ -225,8 +241,9 @@ export function Home() {
         </section>`
       : null}
 
-    <div className="home-actions">
-      <button className="btn btn-block" onClick=${() => go('/add')}><${Icon} name="plus" size=${18} /> 自分で譜面を追加する</button>
+    <div className="home-actions is-two">
+      <button className="btn" onClick=${() => go('/ear')}><${Icon} name="mic" size=${18} /> 耳コピで作る</button>
+      <button className="btn" onClick=${() => go('/add')}><${Icon} name="plus" size=${18} /> 自分で入力する</button>
     </div>
 
     <footer className="home-foot">
@@ -318,22 +335,26 @@ export function Search({ q }) {
           : !withSheets.length
             ? html`<${Empty} icon="search" title="譜面が見つかりませんでした">
                 曲名だけ・アーティスト名だけでも探してみてください。<br />
-                <button className="btn btn-sm" style=${{ marginTop: 12 }} onClick=${() => go('/add?title=' + encodeURIComponent(q))}>自分で譜面を追加する</button>
+                まだどこにも譜面が無い新しい曲なら、音から聴き取って下書きを作れます。<br />
+                <span className="row-gap center" style=${{ marginTop: 12 }}>
+                  <button className="btn btn-sm btn-primary" onClick=${() => go(earLink({ title: q, artist: '' }))}><${Icon} name="mic" size=${16} /> 耳コピで作る</button>
+                  <button className="btn btn-sm" onClick=${() => go('/add?title=' + encodeURIComponent(q))}>自分で入力する</button>
+                </span>
               </${Empty}>`
             : html`<ul className="song-list results">
                 ${withSheets.map((g, i) => html`<${ResultRow} key=${i} g=${g} />`)}
               </ul>`}
       ${!state.loading && without.length
         ? html`<div className="no-sheet">
-            <div className="section-head"><h2 className="muted">譜面がまだ無い曲</h2></div>
+            <div className="section-head"><h2 className="muted">譜面がまだ無い曲</h2><span className="muted small">タップすると耳コピで下書きを作れます</span></div>
             <ul className="song-list">
               ${without.map(
                 (g, i) => html`<li key=${i} className="song-row is-dim">
-                  <button className="song-row-main" onClick=${() => go(`/add?title=${encodeURIComponent(baseTitle(g.title))}&artist=${encodeURIComponent(g.artist)}`)}>
+                  <button className="song-row-main" onClick=${() => go(earLink(g))}>
                     <${Artwork} song=${g} size=${40} />
                     <span className="song-row-text">
                       <span className="song-row-title">${baseTitle(g.title)}</span>
-                      <span className="song-row-sub">${g.artist} ・ 自分で入力する</span>
+                      <span className="song-row-sub">${g.artist} ・ <span className="ear-hint"><${Icon} name="mic" size=${13} /> 耳コピで作る</span></span>
                     </span>
                   </button>
                 </li>`,

@@ -11,6 +11,7 @@ import { SongPage } from './ui/song.js';
 import { Editor } from './ui/editor.js';
 import { Settings } from './ui/settings.js';
 import { AppleGuide } from './ui/apple.js';
+import { EarCopy } from './ui/ear.js';
 import { Welcome } from './ui/welcome.js';
 import { ToastHost, Spinner } from './ui/common.js';
 const html = htm.bind(React.createElement);
@@ -72,6 +73,7 @@ function App() {
   else if ((m = path.match(/^\/edit\/(.+)$/))) page = html`<${Editor} key=${m[1]} id=${decodeURIComponent(m[1])} />`;
   else if (path === '/settings') page = html`<${Settings} />`;
   else if (path === '/apple') page = html`<${AppleGuide} />`;
+  else if (path === '/ear') page = html`<${EarCopy} key=${JSON.stringify(params)} params=${params} />`;
   else if (path === '/open') page = html`<${OpenFrom} key=${JSON.stringify(params)} params=${params} />`;
   else if (path === '/pair') page = html`<${Welcome} onDone=${onPaired} initialMode="code" />`;
   else page = html`<${Home} />`;

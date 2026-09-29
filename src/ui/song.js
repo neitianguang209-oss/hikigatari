@@ -28,7 +28,7 @@ export function SongPage({ id }) {
   const load = useCallback(
     async (force = false) => {
       const cur = lib.get(id);
-      if (!cur || cur.source === 'manual') return;
+      if (!cur || cur.source === 'manual' || cur.source === 'ear') return;
       const tag = `${cur.source}:${cur.sourceId}`;
       setState({ loading: true, error: null });
       try {
@@ -58,7 +58,7 @@ export function SongPage({ id }) {
   );
 
   useEffect(() => {
-    if (song && !song.sheet && song.source !== 'manual' && !state.loading && !state.error) load();
+    if (song && !song.sheet && song.source !== 'manual' && song.source !== 'ear' && !state.loading && !state.error) load();
   }, [song?.source, song?.sourceId, !!song?.sheet]);
 
   // 開いた記録(最近ひらいた曲)
@@ -82,6 +82,7 @@ export function SongPage({ id }) {
               <p className="muted">${state.error}</p>
               <div className="row-gap">
                 <button className="btn btn-primary" onClick=${() => { tried.current.clear(); load(); }}>もう一度</button>
+                <button className="btn" onClick=${() => go(`/ear?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist || '')}${song.appleId ? `&appleId=${song.appleId}` : ''}`)}>耳コピで作る</button>
                 <button className="btn" onClick=${() => go('/edit/' + id)}>自分で入力する</button>
               </div>
               ${song.sourceUrl ? html`<a className="link" href=${song.sourceUrl} target="_blank" rel="noopener">元のページを開く</a>` : null}
@@ -499,6 +500,7 @@ function SongReady({ song, reload }) {
     <div className="song-body">
       <main className="sheet-scroll" ref=${scrollRef}>
         <div className="sheet-inner" style=${{ '--fs': fontScale }}>
+          ${song.source === 'ear' ? html`<${EarBanner} song=${song} />` : null}
           <div className="song-head">
             <${Artwork} song=${song} size=${56} />
             <div className="sheet-meta">
@@ -538,7 +540,7 @@ function SongReady({ song, reload }) {
           <div className="sheet-end">
             ${song.sourceUrl
               ? html`<a href=${song.sourceUrl} target="_blank" rel="noopener" className="link">出典: ${sourceName(song.source)}${song.sourceLabel ? `（${song.sourceLabel}）` : ''}</a>`
-              : html`<span className="muted">自分で入力した譜面</span>`}
+              : html`<span className="muted">${song.source === 'ear' ? '耳コピで作った下書き（自動）' : '自分で入力した譜面'}</span>`}
           </div>
         </div>
       </main>
@@ -716,8 +718,8 @@ const Line = memo(function Line({ line, i, display, instrument, inline, showBars
               ${s.bar && showBars ? html`<i className="bar" aria-hidden="true"></i>` : null}
               ${s.c
                 ? html`<button className="chord" onClick=${(e) => { if (selecting) return; e.stopPropagation(); onChord(s.c, i); }}>
-                    ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} instrument=${instrument} pick=${picks?.[name]} />` : null}
                     <span className="chord-name"><${ChordText} name=${pretty(name)} /></span>
+                    ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} instrument=${instrument} pick=${picks?.[name]} />` : null}
                   </button>`
                 : html`<span className="chord-space"> </span>`}
             </span>`
@@ -727,6 +729,24 @@ const Line = memo(function Line({ line, i, display, instrument, inline, showBars
     })}
   </div>`;
 });
+
+// 耳コピの下書きの案内。サイトに譜面が出ていれば、そちらに切り替えられる
+function EarBanner({ song }) {
+  const found = song.watchFound && song.sources?.length ? song.sources[0] : null;
+  const again = () => go(`/ear?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist || '')}${song.appleId ? `&appleId=${song.appleId}` : ''}`);
+  if (found)
+    return html`<div className="ear-banner is-found" role="status">
+      <span><b>${sourceName(found.source)}</b> にこの曲の譜面が出ました</span>
+      <button className="btn btn-sm btn-primary" onClick=${async () => {
+        if (!confirm('耳コピの下書きから、サイトの譜面に切り替えますか？（下書きは消えます）')) return;
+        await lib.patch(song.id, { source: found.source, sourceId: found.id, sourceUrl: found.url, sourceLabel: found.label || '', sheet: null, edited: false, watch: false, watchFound: null });
+      }}>切り替える</button>
+    </div>`;
+  return html`<div className="ear-banner" role="note">
+    <span>音から聴き取った、耳コピの下書きです。サイトに譜面が出たら、ホームでお知らせします。</span>
+    <button className="btn btn-sm" onClick=${again}>聴き直す</button>
+  </div>`;
+}
 
 // 転調の印: 「転調 +2（Key G → A）カポ 2 → 4 に付けかえ（押さえ方はそのまま）」
 function ModMark({ mark, instrument, onToggle }) {
@@ -958,8 +978,8 @@ function appleMusicUrl(song) {
 function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
   const others = (song.sources || []).filter((s) => !(s.source === song.source && s.id === song.sourceId));
   const switchTo = async (s) => {
-    if (song.edited && !confirm('編集した譜面は消えます。切り替えますか？')) return;
-    await lib.patch(song.id, { source: s.source, sourceId: s.id, sourceUrl: s.url, sourceLabel: s.label || '', sheet: null, edited: false });
+    if ((song.edited || song.source === 'ear') && !confirm(song.source === 'ear' ? '耳コピの下書きは消えます。切り替えますか？' : '編集した譜面は消えます。切り替えますか？')) return;
+    await lib.patch(song.id, { source: s.source, sourceId: s.id, sourceUrl: s.url, sourceLabel: s.label || '', sheet: null, edited: false, watch: false, watchFound: null });
     onClose();
   };
   return html`<${Sheet} open=${open} onClose=${onClose} title="この曲">
@@ -983,7 +1003,7 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
     <div className="menu-group">
       <button className="menu-item" onClick=${() => { onClose(); onText(); }}><${Icon} name="text" /><span className="menu-item-text">文字の大きさ</span></button>
       <button className="menu-item" onClick=${() => { onClose(); go('/edit/' + song.id); }}><${Icon} name="edit" /><span className="menu-item-text">譜面を直す・書き足す</span></button>
-      ${song.source !== 'manual'
+      ${song.source !== 'manual' && song.source !== 'ear'
         ? html`<button className="menu-item" onClick=${() => { onClose(); reload(true); }}><${Icon} name="refresh" /><span className="menu-item-text">譜面を取り直す（元サイトの最新にする）</span></button>`
         : null}
       ${song.sourceUrl
@@ -999,7 +1019,7 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
         toast('消しました', { action: { label: '元に戻す', onClick: async () => { await lib.put({ ...keep, deleted: false }); toast('元に戻しました'); } } });
       }}><${Icon} name="trash" /><span className="menu-item-text">この曲を消す</span></button>
     </div>
-    ${others.length === 0 && song.source !== 'manual' ? html`<p className="panel-note">ほかのサイトの版は見つかっていません。</p>` : null}
+    ${others.length === 0 && song.source !== 'manual' ? html`<p className="panel-note">${song.source === 'ear' ? 'サイトに譜面が出たら、ホームでお知らせします。' : 'ほかのサイトの版は見つかっていません。'}</p>` : null}
   </${Sheet}>`;
 }
 

@@ -637,9 +637,9 @@ async function newDevice(name: string) {
 
 // deno-lint-ignore no-explicit-any
 function backupShape(d: any) {
-  // バックアップ(anonから読める app_backups)には取り込んだ歌詞を載せない。自分で入力した譜面だけ残す。
+  // バックアップ(anonから読める app_backups)には取り込んだ歌詞を載せない。自分で入力した譜面・耳コピの下書き(歌詞なし)だけ残す。
   const { sheet, ...rest } = d ?? {};
-  if (sheet && d.source === 'manual') return { ...rest, sheet };
+  if (sheet && (d.source === 'manual' || d.source === 'ear')) return { ...rest, sheet };
   return { ...rest, sheet: sheet ? { key: sheet.key, bpm: sheet.bpm, beatsPerBar: sheet.beatsPerBar } : null };
 }
 
