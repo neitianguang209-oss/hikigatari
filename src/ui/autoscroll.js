@@ -31,6 +31,34 @@ export function songFit(totalBeats, bpm, durationMs) {
   return { ratio, usable: true };
 }
 
+// ---------------------------------------------------------------- 自分の録音に合わせる
+// anchors: [{ line, t }] = 「この行はこの時刻に始まる」の目印(歌を聴きながら行をタップして作る)。
+// 目印と目印のあいだは拍どおりに割り振り、前後ははみ出しぶんを近くの速さで伸ばす。目印が無ければ BPM どおり
+function points(anchors, starts) {
+  return (anchors || [])
+    .filter((a) => starts[a.line] != null)
+    .map((a) => [a.t, starts[a.line]])
+    .sort((x, y) => x[0] - y[0]);
+}
+export function beatAtTime(t, anchors, starts, bps) {
+  const p = points(anchors, starts);
+  if (!p.length) return t * bps;
+  const rate = (k) => Math.max(0.05, (p[k + 1][1] - p[k][1]) / Math.max(0.05, p[k + 1][0] - p[k][0]));
+  if (t <= p[0][0]) return p[0][1] + (t - p[0][0]) * (p.length > 1 ? rate(0) : bps);
+  for (let k = 0; k < p.length - 1; k++) if (t <= p[k + 1][0]) return p[k][1] + (t - p[k][0]) * rate(k);
+  const L = p.length - 1;
+  return p[L][1] + (t - p[L][0]) * (L > 0 ? rate(L - 1) : bps);
+}
+export function timeAtBeat(b, anchors, starts, bps) {
+  const p = points(anchors, starts);
+  if (!p.length) return b / bps;
+  const rate = (k) => Math.max(0.05, (p[k + 1][1] - p[k][1]) / Math.max(0.05, p[k + 1][0] - p[k][0]));
+  if (b <= p[0][1]) return p[0][0] + (b - p[0][1]) / (p.length > 1 ? rate(0) : bps);
+  for (let k = 0; k < p.length - 1; k++) if (b <= p[k + 1][1]) return p[k][0] + (b - p[k][1]) / rate(k);
+  const L = p.length - 1;
+  return p[L][0] + (b - p[L][1]) / (L > 0 ? rate(L - 1) : bps);
+}
+
 let audioCtx = null;
 function clickSound(accent) {
   try {
@@ -55,7 +83,8 @@ export function unlockAudio() {
   } catch {}
 }
 
-export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong }) {
+// clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
+export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null }) {
   const [playing, setPlaying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -82,7 +111,16 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   // 曲の長さに合わせる: 譜面の拍を進める速さだけを変える(クリック音は本来のBPMのまま)
   const fit = useMemo(() => songFit(tl.total, bpm, durationMs), [tl.total, bpm, durationMs]);
   const scrollRate = fitSong && fit && fit.usable ? 1 / fit.ratio : 1;
-  live.current = { bpm, click, countIn, beatsPerBar, scrollRate };
+  live.current = { bpm, click, countIn, beatsPerBar, scrollRate, clock };
+  const clockBeat = () => {
+    const c = live.current.clock;
+    return beatAtTime(c.time(), c.anchors, s.tl.starts, c.bps);
+  };
+  const clockSeek = (b) => {
+    const c = live.current.clock;
+    const d = c.duration() || Infinity;
+    c.seekTime(Math.max(0, Math.min(d - 0.05, timeAtBeat(b, c.anchors, s.tl.starts, c.bps))));
+  };
 
   const measure = useCallback(() => {
     const el = scrollRef.current;
@@ -168,6 +206,32 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const frame = (ts) => {
     if (!s.playingFlag) return;
+    // 自分の録音に合わせるとき: 録音の再生位置から今の拍を出す(クリックもカウントもしない)
+    if (live.current.clock) {
+      const c = live.current.clock;
+      let eff = clockBeat();
+      if (s.loop) {
+        const a = s.tl.starts[s.loop.from];
+        const b = s.tl.starts[s.loop.to] + s.tl.durs[s.loop.to];
+        if (eff >= b && b > a) {
+          clockSeek(a);
+          eff = a;
+        }
+      }
+      if (!s.holding) setScroll(posAtBeat(eff) - anchor());
+      highlight(eff);
+      if (ts - s.lastProg > 250) {
+        s.lastProg = ts;
+        const d = c.duration();
+        setProgress(d ? Math.min(1, c.time() / d) : 0);
+      }
+      if (c.ended()) {
+        stop();
+        return;
+      }
+      s.raf = requestAnimationFrame(frame);
+      return;
+    }
     // 経過時間どおりに進める。2秒以上あいた(アプリが裏に回っていた)ときだけ、その間は止まっていたとみなす
     let dt = s.last ? (ts - s.last) / 1000 : 0;
     if (dt > 2) dt = 0;
@@ -238,6 +302,25 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const start = (fromBeat) => {
     if (!s.tl.timed.length) return;
+    if (live.current.clock) {
+      // 録音: 止めたところから続ける(行を指定されたらその行の時刻から)
+      measure();
+      if (fromBeat != null) clockSeek(fromBeat);
+      else if (s.loop) {
+        const a = s.tl.starts[s.loop.from];
+        const e = s.tl.starts[s.loop.to] + s.tl.durs[s.loop.to];
+        const b = clockBeat();
+        if (b < a || b >= e) clockSeek(a);
+      }
+      if (live.current.clock.ended()) live.current.clock.seekTime(0);
+      live.current.clock.play();
+      s.holding = false;
+      s.playingFlag = true;
+      setPlaying(true);
+      cancelAnimationFrame(s.raf);
+      s.raf = requestAnimationFrame(frame);
+      return;
+    }
     unlockAudio();
     measure();
     let b = fromBeat != null ? fromBeat : beatFromScroll();
@@ -267,6 +350,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   };
 
   const stop = () => {
+    live.current.clock?.pause();
     s.playingFlag = false;
     cancelAnimationFrame(s.raf);
     s.countEnd = null;
@@ -295,6 +379,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const toStart = () => {
     stop();
+    live.current.clock?.seekTime(0);
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
     setProgress(0);
@@ -304,6 +389,15 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const jumpToLine = (i) => {
     measure();
     const b = s.tl.starts[i] ?? 0;
+    if (live.current.clock) {
+      if (s.playingFlag) clockSeek(b);
+      else {
+        clockSeek(b);
+        const el = scrollRef.current;
+        if (el) el.scrollTo({ top: Math.max(0, (s.tops[i] ?? 0) - anchor()), behavior: 'smooth' });
+      }
+      return;
+    }
     if (s.playingFlag) {
       s.beat = b;
       s.countEnd = null;
@@ -317,7 +411,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const step = (dir) => {
     measure();
-    const cur = s.playingFlag ? Math.max(s.beat, s.startBeat) : beatFromScroll();
+    const cur = live.current.clock && s.playingFlag ? clockBeat() : s.playingFlag ? Math.max(s.beat, s.startBeat) : beatFromScroll();
     const k = timedIndexAt(cur);
     const nk = Math.max(0, Math.min(s.tl.timed.length - 1, k + dir));
     const i = s.tl.timed[nk];
@@ -335,6 +429,13 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       clearTimeout(s.idle);
       s.idle = setTimeout(() => {
         measure();
+        // 録音に合わせているときは、録音の再生位置をスクロールしたところへ動かす
+        if (live.current.clock) {
+          clockSeek(beatFromScroll());
+          s.expect = el.scrollTop;
+          s.holding = false;
+          return;
+        }
         s.beat = beatFromScroll();
         if (s.countEnd != null) {
           s.countEnd = null;
@@ -366,5 +467,5 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     cancelAnimationFrame(s.raf);
   }, []);
 
-  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, fit, scrollRate, loop, setLoop, bindBeat };
+  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop, bindBeat };
 }

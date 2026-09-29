@@ -10,11 +10,13 @@ let dbp = null;
 function openDb() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
-    const r = indexedDB.open(DB_NAME, 1);
+    // v2: 自分の録音(動画・音声)を置く media を追加。曲のデータはそのまま
+    const r = indexedDB.open(DB_NAME, 2);
     r.onupgradeneeded = () => {
       const d = r.result;
       if (!d.objectStoreNames.contains('songs')) d.createObjectStore('songs', { keyPath: 'id' });
       if (!d.objectStoreNames.contains('kv')) d.createObjectStore('kv', { keyPath: 'k' });
+      if (!d.objectStoreNames.contains('media')) d.createObjectStore('media', { keyPath: 'id' });
     };
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -253,3 +255,11 @@ export async function exportAll() {
   await initStore();
   return { app: 'hikigatari', exportedAt: new Date().toISOString(), songs: [...mem.values()].filter((s) => !s.deleted) };
 }
+
+// ---------------------------------------------------------------- 自分の録音(動画・音声)
+// 大きいので同期はせず、この端末の中だけに置く。曲ごとに1つ
+export const media = {
+  get: (id) => run('media', 'readonly', (s) => s.get(id)).catch(() => null),
+  put: (id, rec) => run('media', 'readwrite', (s) => s.put({ id, ...rec })),
+  del: (id) => run('media', 'readwrite', (s) => s.delete(id)).catch(() => {}),
+};

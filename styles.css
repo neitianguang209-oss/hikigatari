@@ -45,7 +45,7 @@
     --accent-soft: #3a2a18;
     --on-accent: #1a1208;
     --accent-2: #6ea8ff;
-    --chord: #ffb356;
+    --chord: #f3eee7; /* ダークモードも単色(白系)。押さえる点も同じ色 */
     --kb-right: #ffb356;
     --hl: #2c2a1a;
     --bar: #4a4f59;
@@ -72,7 +72,7 @@
   --accent-soft: #3a2a18;
   --on-accent: #1a1208;
   --accent-2: #6ea8ff;
-  --chord: #ffb356;
+  --chord: #f3eee7;
   --kb-right: #ffb356;
   --hl: #2c2a1a;
   --bar: #4a4f59;
@@ -3120,4 +3120,166 @@ html,
 .ear-again .row-gap {
   justify-content: center;
   margin-top: 8px;
+}
+
+/* ---------------------------------------------------------------- 自分の歌(動画・録音)に合わせる */
+
+.rec-video {
+  position: fixed;
+  z-index: 30;
+  top: calc(env(safe-area-inset-top) + 104px);
+  right: 10px;
+  width: 104px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  transition: width 0.2s ease;
+}
+.rec-video video {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+}
+.rec-video.is-big {
+  width: min(62vw, 420px);
+}
+.rec-video.is-hidden,
+.rec-video.is-audio {
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: none;
+}
+.rec-video-hide {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.rec-dock {
+  flex: none;
+  padding: 6px 12px 4px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.rec-hint {
+  margin: 2px 0 6px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.rec-hint b {
+  color: var(--accent-strong);
+}
+.rec-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rec-time {
+  flex: none;
+  min-width: 2.6em;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  text-align: center;
+}
+.rec-seek {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  height: 28px;
+}
+.chip.chip-sm.rec-speed {
+  flex: none;
+  min-width: 3.2em;
+  justify-content: center;
+}
+.icon-btn.rec-mini {
+  flex: none;
+  width: 34px;
+  height: 34px;
+}
+.transport.is-rec {
+  border-top: 0;
+}
+.tempo-btn.rec-btn {
+  gap: 6px;
+  color: var(--accent-strong);
+}
+.transport-space {
+  width: 44px;
+  flex: none;
+}
+.rec-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  margin-bottom: 10px;
+}
+.rec-info .icon {
+  flex: none;
+  color: var(--accent-strong);
+}
+.rec-info b {
+  display: block;
+  word-break: break-all;
+}
+.rec-info small,
+.menu-item-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.menu-item.is-accent .icon {
+  color: var(--accent-strong);
+}
+.menu-item.is-accent .menu-item-text {
+  font-weight: 700;
+}
+.menu-item:disabled {
+  opacity: 0.45;
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .song {
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+  }
+  .rec-dock {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    padding-top: 2px;
+  }
+  .transport {
+    grid-row: 4;
+  }
+  .rec-hint {
+    display: none;
+  }
+  .rec-video {
+    top: calc(env(safe-area-inset-top) + 52px);
+    width: 150px;
+  }
+}
+/* 録音の操作部分が出ているときは、お知らせをその上に出す */
+body:has(.rec-dock) .toast-host {
+  bottom: calc(176px + env(safe-area-inset-bottom));
 }

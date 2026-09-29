@@ -11,7 +11,7 @@ import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, 
 import { rankCapos, shapeName, guitarVoicings, standardVoicing, planVoicings } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { detectModulation } from '../music/modulation.js';
-import { lib, useSong } from '../lib/store.js';
+import { lib, useSong, media } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
@@ -309,7 +309,118 @@ function SongReady({ song, reload }) {
   const fitSong = st.fitSong ?? true;
   const beatsPerBar = song.sheet.beatsPerBar || parsed.meta.beatsPerBar || 4;
 
-  const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click, durationMs: song.durationMs, fitSong });
+  // ---- 自分の歌(動画・録音)に合わせる
+  // rec: この端末に置いた録音 / recOn: 録音に合わせて流すか(曲ごとに覚える) / 行の時刻の目印は録音ごとに settings.recSync に
+  const [rec, setRec] = useState(null); // { url, name, type, isVideo, fp, size, saved }
+  const videoRef = useRef(null);
+  const recFileRef = useRef(null);
+  const recOn = !!rec && (st.recOn ?? true);
+  const recAnchors = (rec && st.recSync?.[rec.fp]) || [];
+  const [recSpeed, setRecSpeed] = useState(1);
+  const [recVideo, setRecVideo] = useState('small'); // small | big | hidden
+  const [recTime, setRecTime] = useState({ t: 0, d: 0 });
+  useEffect(() => {
+    let url = null;
+    let alive = true;
+    media.get(song.id).then((r) => {
+      if (!alive || !r?.blob) return;
+      url = URL.createObjectURL(r.blob);
+      setRec({ url, name: r.name, type: r.type, isVideo: r.isVideo, fp: r.fp, size: r.size, saved: true });
+    });
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [song.id]);
+  const clock = recOn
+    ? {
+        time: () => videoRef.current?.currentTime || 0,
+        seekTime: (t) => {
+          if (videoRef.current) videoRef.current.currentTime = t;
+        },
+        play: () => videoRef.current?.play().catch(() => {}),
+        pause: () => videoRef.current?.pause(),
+        ended: () => !!videoRef.current?.ended,
+        duration: () => videoRef.current?.duration || 0,
+        anchors: recAnchors,
+        bps: bpm / 60,
+      }
+    : null;
+
+  const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click, durationMs: song.durationMs, fitSong, clock });
+
+  // 録音を選んだら、この端末に保存して(大きすぎるときは今回だけ)、録音に合わせるモードにする
+  const attachRec = async (file) => {
+    if (!file) return;
+    scroll.stop();
+    const fp = `${file.name}|${file.size}`;
+    const isVideo = /^video\//.test(file.type) || /\.(mov|mp4|m4v|webm)$/i.test(file.name);
+    let saved = false;
+    if (file.size < 1.5e9) {
+      try {
+        await media.put(song.id, { blob: file, name: file.name, type: file.type, size: file.size, fp, isVideo, savedAt: Date.now() });
+        saved = true;
+      } catch {}
+    }
+    if (rec?.url) URL.revokeObjectURL(rec.url);
+    setRec({ url: URL.createObjectURL(file), name: file.name, type: file.type, isVideo, fp, size: file.size, saved });
+    setRecVideo('small');
+    setSt({ recOn: true });
+    toast(saved ? '録音をこの端末に保存しました。▶ で再生して、歌い出した行をタップしてください' : '録音が大きいので、今回だけ使います（次に開いたら選び直してください）', { ms: 4500 });
+  };
+  const removeRec = async () => {
+    if (!confirm('この曲の録音を、この端末から消しますか？（行の時刻の目印も消えます）')) return;
+    scroll.stop();
+    await media.del(song.id);
+    if (rec?.url) URL.revokeObjectURL(rec.url);
+    const sync = { ...(st.recSync || {}) };
+    if (rec) delete sync[rec.fp];
+    setSt({ recSync: sync, recOn: false });
+    setRec(null);
+    setPanel(null);
+  };
+  const setRecOn = (on) => {
+    scroll.stop();
+    setSt({ recOn: on });
+  };
+  // 行の時刻の目印を足す(同じ行の目印は置きかえ、前後と順番が食い違う目印は外す)
+  const addAnchor = (line) => {
+    const t = +(videoRef.current?.currentTime || 0).toFixed(2);
+    const next = recAnchors.filter((a) => a.line !== line && ((a.line < line && a.t < t) || (a.line > line && a.t > t)));
+    next.push({ line, t });
+    next.sort((a, b) => a.t - b.t);
+    const all = { ...(st.recSync || {}) };
+    all[rec.fp] = next;
+    // 録音は曲ごとに3つぶんまで覚える
+    const keys = Object.keys(all);
+    if (keys.length > 3) for (const k of keys.slice(0, keys.length - 3)) if (k !== rec.fp) delete all[k];
+    setSt({ recSync: all });
+    toast(`この行を ${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')} に合わせました`, { ms: 1400 });
+  };
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = recSpeed;
+    v.preservesPitch = true;
+    v.webkitPreservesPitch = true;
+  }, [recSpeed, rec?.url, recOn]);
+  // 録音が外から止まったとき(電話・ほかのアプリの音など)は、譜面も止める
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onPause = () => scroll.playing && !v.ended && scroll.stop();
+    const onTime = () => setRecTime({ t: v.currentTime, d: v.duration || 0 });
+    v.addEventListener('pause', onPause);
+    v.addEventListener('timeupdate', onTime);
+    v.addEventListener('loadedmetadata', onTime);
+    v.addEventListener('seeked', onTime);
+    return () => {
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('timeupdate', onTime);
+      v.removeEventListener('loadedmetadata', onTime);
+      v.removeEventListener('seeked', onTime);
+    };
+  }, [rec?.url, recOn, scroll.playing]);
 
   // 曲の長さ(自動スクロールを曲に合わせるのに使う)が分からない曲は、Apple の曲データから一度だけ探す
   useEffect(() => {
@@ -413,9 +524,13 @@ function SongReady({ song, reload }) {
         }
         return;
       }
+      if (recOn && scroll.playing) {
+        if (timed) addAnchor(i);
+        return;
+      }
       if (scroll.playing) scroll.jumpToLine(i);
     },
-    [loopSel, scroll.playing, parsed],
+    [loopSel, scroll.playing, parsed, recOn, rec, st.recSync],
   );
   // 見出し(サビ・Aメロ など)をタップ: 区間選び中ならその段落まるごとをくり返す / 演奏中ならそこへ飛ぶ
   const hasLabels = useMemo(() => parsed.lines.some((l) => l.type === 'label'), [parsed]);
@@ -562,7 +677,26 @@ function SongReady({ song, reload }) {
 
     ${scroll.countdown ? html`<div className="countdown" aria-live="assertive"><span key=${scroll.countdown}>${scroll.countdown}</span></div>` : null}
 
+    ${recOn
+      ? html`<${RecDock}
+          rec=${rec}
+          videoRef=${videoRef}
+          mode=${recVideo}
+          setMode=${setRecVideo}
+          time=${recTime}
+          anchors=${recAnchors.length}
+          speed=${recSpeed}
+          setSpeed=${setRecSpeed}
+          onSeek=${(t) => {
+            if (videoRef.current) videoRef.current.currentTime = t;
+          }}
+        />`
+      : null}
+    <input ref=${recFileRef} type="file" accept="video/*,audio/*" hidden onChange=${(e) => { attachRec(e.target.files?.[0]); e.target.value = ''; }} />
+
     <${Transport}
+      rec=${recOn}
+      onRec=${() => setPanel('rec')}
       scroll=${scroll}
       bpm=${bpm}
       bpmKnown=${bpmKnown}
@@ -590,7 +724,39 @@ function SongReady({ song, reload }) {
       durationMs=${song.durationMs}
     />
     <${TextPanel} open=${panel === 'text'} onClose=${() => setPanel(null)} fontScale=${fontScale} setSt=${setSt} />
-    <${MorePanel} open=${panel === 'more'} onClose=${() => setPanel(null)} song=${song} reload=${reload} onText=${() => setPanel('text')} onTuner=${() => setPanel('tuner')} />
+    <${MorePanel}
+      open=${panel === 'more'}
+      onClose=${() => setPanel(null)}
+      song=${song}
+      reload=${reload}
+      onText=${() => setPanel('text')}
+      onTuner=${() => setPanel('tuner')}
+      rec=${rec}
+      recOn=${recOn}
+      onPickRec=${() => { setPanel(null); recFileRef.current?.click(); }}
+      onRecOn=${() => { setRecOn(true); setPanel(null); }}
+      onRecPanel=${() => setPanel('rec')}
+    />
+    <${RecPanel}
+      open=${panel === 'rec'}
+      onClose=${() => setPanel(null)}
+      rec=${rec}
+      recOn=${recOn}
+      anchors=${recAnchors.length}
+      speed=${recSpeed}
+      setSpeed=${setRecSpeed}
+      video=${recVideo}
+      setVideo=${setRecVideo}
+      onPick=${() => recFileRef.current?.click()}
+      onReset=${() => {
+        const all = { ...(st.recSync || {}) };
+        delete all[rec.fp];
+        setSt({ recSync: all });
+        toast('行の時刻の目印を消しました');
+      }}
+      onOff=${() => { setRecOn(false); setPanel(null); }}
+      onRemove=${removeRec}
+    />
     <${TunerSheet} open=${panel === 'tuner'} onClose=${() => setPanel(null)} />
     <${ChordPanel}
       tap=${chordTap}
@@ -798,26 +964,103 @@ function ChordStrip({ names, instrument, onTap, vertical = false, picks = null }
 
 // ---------------------------------------------------------------- 再生バー
 
-function Transport({ scroll, bpm, bpmKnown, beatsPerBar, click, onClick, onTempo, looping, onLoop }) {
-  return html`<div className="transport">
-    <div className="transport-progress" style=${{ transform: `scaleX(${scroll.progress})` }}></div>
-    <div className=${cx('beat-dots', scroll.playing && 'is-playing')} ref=${scroll.bindBeat} aria-hidden="true">
-      ${Array.from({ length: Math.min(8, beatsPerBar || 4) }, (_, i) => html`<i key=${i}></i>`)}
-    </div>
+// rec: 自分の録音に合わせているとき(テンポの代わりに「録音」、メトロノームは出さない)
+function Transport({ scroll, bpm, bpmKnown, beatsPerBar, click, onClick, onTempo, looping, onLoop, rec = false, onRec }) {
+  return html`<div className=${cx('transport', rec && 'is-rec')}>
+    ${rec ? null : html`<div className="transport-progress" style=${{ transform: `scaleX(${scroll.progress})` }}></div>`}
+    ${rec
+      ? null
+      : html`<div className=${cx('beat-dots', scroll.playing && 'is-playing')} ref=${scroll.bindBeat} aria-hidden="true">
+          ${Array.from({ length: Math.min(8, beatsPerBar || 4) }, (_, i) => html`<i key=${i}></i>`)}
+        </div>`}
     <button className="icon-btn" onClick=${scroll.toStart} aria-label="最初に戻る"><${Icon} name="skipBack" /></button>
-    <button className=${cx('tempo-btn', !bpmKnown && 'is-guess')} onClick=${onTempo} aria-label="テンポを変える">
-      <span className="tempo-note">♩</span><span className="tempo-num">${bpm}</span><span className="tempo-unit">BPM</span>
-    </button>
-    <button className=${cx('play-btn', scroll.playing && 'is-playing')} onClick=${scroll.toggle} aria-label=${scroll.playing ? '止める' : '自動スクロール開始'}>
+    ${rec
+      ? html`<button className="tempo-btn rec-btn" onClick=${onRec} aria-label="録音の設定">
+          <${Icon} name="mic" size=${18} /><span className="tempo-unit">録音</span>
+        </button>`
+      : html`<button className=${cx('tempo-btn', !bpmKnown && 'is-guess')} onClick=${onTempo} aria-label="テンポを変える">
+          <span className="tempo-note">♩</span><span className="tempo-num">${bpm}</span><span className="tempo-unit">BPM</span>
+        </button>`}
+    <button className=${cx('play-btn', scroll.playing && 'is-playing')} onClick=${scroll.toggle} aria-label=${scroll.playing ? '止める' : rec ? '録音を再生' : '自動スクロール開始'}>
       <${PlayIcon} playing=${scroll.playing} size=${30} />
     </button>
-    <button className=${cx('icon-btn', click && 'is-on')} onClick=${onClick} aria-pressed=${click} aria-label="クリック音">
-      <${Icon} name="metronome" />
-    </button>
+    ${rec
+      ? html`<span className="transport-space" aria-hidden="true"></span>`
+      : html`<button className=${cx('icon-btn', click && 'is-on')} onClick=${onClick} aria-pressed=${click} aria-label="クリック音">
+          <${Icon} name="metronome" />
+        </button>`}
     <button className=${cx('icon-btn', looping && 'is-on')} onClick=${onLoop} aria-pressed=${looping} aria-label=${looping ? '区間リピートをやめる' : '区間リピート'}>
       <${Icon} name="repeat" />
     </button>
   </div>`;
+}
+
+// ---------------------------------------------------------------- 自分の録音
+
+const mmssRec = (t) => (isFinite(t) ? `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}` : '0:00');
+
+// 動画の小窓(タップで大きく/小さく)と、再生位置のつまみ・速さ
+function RecDock({ rec, videoRef, mode, setMode, time, anchors, speed, setSpeed, onSeek }) {
+  const cycle = () => setSpeed(speed === 1 ? 0.9 : speed === 0.9 ? 0.8 : speed === 0.8 ? 0.7 : 1);
+  return html`<${React.Fragment}>
+    <div className=${cx('rec-video', rec.isVideo ? 'is-' + mode : 'is-audio')} onClick=${() => rec.isVideo && setMode(mode === 'small' ? 'big' : 'small')}>
+      <video ref=${videoRef} src=${rec.url} playsInline preload="auto"></video>
+      ${rec.isVideo && mode !== 'hidden'
+        ? html`<button className="rec-video-hide" onClick=${(e) => { e.stopPropagation(); setMode('hidden'); }} aria-label="映像を隠す"><${Icon} name="close" size=${14} /></button>`
+        : null}
+    </div>
+    <div className="rec-dock">
+      ${!anchors
+        ? html`<p className="rec-hint">▶ で再生して、<b>歌い出した行をタップ</b>すると、その行の時刻を覚えます。ずれてきたら、その都度タップで直せます。</p>`
+        : null}
+      <div className="rec-row">
+        <span className="rec-time">${mmssRec(time.t)}</span>
+        <input
+          type="range"
+          className="rec-seek"
+          min="0"
+          max=${time.d || 0}
+          step="0.1"
+          value=${time.t}
+          onInput=${(e) => onSeek(Number(e.target.value))}
+          aria-label="録音の再生位置"
+        />
+        <span className="rec-time">${mmssRec(time.d)}</span>
+        <button className=${cx('chip chip-sm rec-speed', speed !== 1 && 'is-on')} onClick=${cycle} aria-label="再生の速さ">${speed === 1 ? '1×' : speed + '×'}</button>
+        ${rec.isVideo && mode === 'hidden'
+          ? html`<button className="icon-btn rec-mini" onClick=${() => setMode('small')} aria-label="映像を出す"><${Icon} name="video" size=${18} /></button>`
+          : null}
+      </div>
+    </div>
+  </${React.Fragment}>`;
+}
+
+function RecPanel({ open, onClose, rec, recOn, anchors, speed, setSpeed, video, setVideo, onPick, onReset, onOff, onRemove }) {
+  if (!rec) return null;
+  const mb = rec.size ? Math.round(rec.size / 1e6) : 0;
+  return html`<${Sheet} open=${open} onClose=${onClose} title="自分の歌に合わせる">
+    <div className="rec-info">
+      <${Icon} name=${rec.isVideo ? 'video' : 'mic'} />
+      <span><b>${rec.name}</b><small>${mb ? `${mb}MB ・ ` : ''}${rec.saved ? 'この端末に保存しています（ほかの端末には送りません）' : '大きいので今回だけ（次に開いたら選び直し）'}</small></span>
+    </div>
+    <p className="panel-lead">再生中に<b>歌っている行をタップ</b>すると、その行の時刻を覚え、次からは録音にぴったり合わせて譜面が流れます。全部の行でなくても、サビの頭など何か所かで十分です（あいだは自動でつなぎます）。</p>
+    <div className="panel-field">
+      <div className="panel-field-label">再生の速さ（音程はそのまま）</div>
+      <${Segmented} label="再生の速さ" value=${speed} onChange=${setSpeed} options=${[1, 0.9, 0.8, 0.7].map((v) => ({ value: v, label: v === 1 ? 'そのまま' : `${v}×` }))} />
+    </div>
+    ${rec.isVideo
+      ? html`<div className="panel-field">
+          <div className="panel-field-label">映像</div>
+          <${Segmented} label="映像" value=${video} onChange=${setVideo} options=${[{ value: 'small', label: '小さく' }, { value: 'big', label: '大きく' }, { value: 'hidden', label: '隠す（音だけ）' }]} />
+        </div>`
+      : null}
+    <div className="menu-group">
+      <button className="menu-item" onClick=${onReset} disabled=${!anchors}><${Icon} name="refresh" /><span className="menu-item-text">行の時刻をやり直す<small>${anchors ? `いま ${anchors}か所 合わせています` : 'まだ合わせていません'}</small></span></button>
+      <button className="menu-item" onClick=${onPick}><${Icon} name="upload" /><span className="menu-item-text">別の動画・録音を選ぶ</span></button>
+      ${recOn ? html`<button className="menu-item" onClick=${onOff}><${Icon} name="metronome" /><span className="menu-item-text">録音に合わせるのをやめる（BPMで流す）</span></button>` : null}
+      <button className="menu-item is-danger" onClick=${onRemove}><${Icon} name="trash" /><span className="menu-item-text">この端末から録音を消す</span></button>
+    </div>
+  </${Sheet}>`;
 }
 
 // ---------------------------------------------------------------- パネル類
@@ -975,7 +1218,7 @@ function appleMusicUrl(song) {
   return `https://music.apple.com/jp/search?term=${encodeURIComponent(`${baseTitle(song.title)} ${song.artist || ''}`.trim())}`;
 }
 
-function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
+function MorePanel({ open, onClose, song, reload, onText, onTuner, rec = null, recOn = false, onPickRec, onRecOn, onRecPanel }) {
   const others = (song.sources || []).filter((s) => !(s.source === song.source && s.id === song.sourceId));
   const switchTo = async (s) => {
     if ((song.edited || song.source === 'ear') && !confirm(song.source === 'ear' ? '耳コピの下書きは消えます。切り替えますか？' : '編集した譜面は消えます。切り替えますか？')) return;
@@ -996,6 +1239,16 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
           })}
         </div>`
       : null}
+    <div className="menu-group">
+      ${!rec
+        ? html`<button className="menu-item is-accent" onClick=${onPickRec}>
+            <${Icon} name="mic" />
+            <span className="menu-item-text">自分の歌（動画・録音）に合わせる<small>アカペラで撮った動画などを流しながら、譜面をいっしょに見られます</small></span>
+          </button>`
+        : recOn
+          ? html`<button className="menu-item is-accent" onClick=${onRecPanel}><${Icon} name="mic" /><span className="menu-item-text">録音の設定<small>${rec.name}</small></span></button>`
+          : html`<button className="menu-item is-accent" onClick=${onRecOn}><${Icon} name="mic" /><span className="menu-item-text">録音に合わせる<small>${rec.name}</small></span></button>`}
+    </div>
     <div className="menu-group">
       <a className="menu-item" href=${appleMusicUrl(song)} target="_blank" rel="noopener" onClick=${onClose}><${Icon} name="headphones" /><span className="menu-item-text">Apple Music で原曲を聴く</span></a>
       <button className="menu-item" onClick=${onTuner}><${Icon} name="tuner" /><span className="menu-item-text">チューナー（ギターの音合わせ）</span></button>
