@@ -121,9 +121,10 @@ function parseBody(line, chorus) {
 }
 
 export function parseSheet(text) {
-  const meta = { title: '', subtitle: '', key: null, bpm: null, beatsPerBar: 4 };
+  const meta = { title: '', subtitle: '', key: null, bpm: null, beatsPerBar: 4, keyChanges: [] };
   const lines = [];
   let chorus = false;
+  let pendingKey = null; // 途中の {key:} (転調)。次の行に印をつける
   for (const raw of String(text || '').replace(/\r/g, '').split('\n')) {
     const line = raw.replace(/[\s]+$/, '');
     const t = line.trim();
@@ -137,7 +138,10 @@ export function parseSheet(text) {
       const val = (dir[2] || '').trim();
       if (name === 'title' || name === 't') meta.title = val;
       else if (name === 'subtitle' || name === 'st') meta.subtitle = val;
-      else if (name === 'key') meta.key = val;
+      else if (name === 'key') {
+        if (!meta.key) meta.key = val;
+        else pendingKey = val;
+      }
       else if (name === 'tempo') meta.bpm = Number(val) || meta.bpm;
       else if (name === 'time') {
         const ts = val.match(/(\d+)\s*\/\s*(\d+)/);
@@ -157,7 +161,12 @@ export function parseSheet(text) {
       continue;
     }
     if (/^\{[^}]*\}$/.test(t)) continue; // ChordWiki の独自記法(リンク等)は無視
-    lines.push(parseBody(line, chorus));
+    const body = parseBody(line, chorus);
+    if (pendingKey) {
+      body.keyChange = pendingKey;
+      pendingKey = null;
+    }
+    lines.push(body);
   }
   // 前後の空行を落とし、連続する空行は1つにまとめる
   const out = [];
@@ -166,6 +175,7 @@ export function parseSheet(text) {
     out.push(l);
   }
   while (out.length && out[out.length - 1].type === 'blank') out.pop();
+  out.forEach((l, i) => l.keyChange && meta.keyChanges.push({ at: i, key: l.keyChange }));
   return { meta, lines: out };
 }
 

@@ -10,6 +10,7 @@ import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
 import { rankCapos, shapeName, guitarVoicings, standardVoicing, planVoicings } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
+import { detectModulation } from '../music/modulation.js';
 import { lib, useSong } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
@@ -154,68 +155,150 @@ function SongReady({ song, reload }) {
     return m;
   }, [stats, transpose, soundFlat]);
 
+  // 転調(曲の途中でキーが変わるところ)。行ごとに、出だしから何半音ずれているか
+  const modulation = useMemo(() => detectModulation(parsed.lines, origKey, parsed.meta.keyChanges), [parsed, origKey]);
+  const shifts = modulation.shifts;
+  const shiftSet = useMemo(() => [...new Set(shifts)], [modulation]);
+  const hasMod = modulation.marks.length > 0;
+  // ギター: 転調したらカポを付けかえて、押さえ方(コードの形)はそのまま弾く
+  const follow = instrument === 'guitar' && hasMod && (st.capoFollow ?? true);
+  const capoLimit = Math.max(prefs.maxCapo, 7) + 2;
+
+  // ずれごとの、実際に鳴るコード名と回数
+  const countsBy = useMemo(() => {
+    const by = new Map(shiftSet.map((k) => [k, new Map()]));
+    parsed.lines.forEach((l, i) => {
+      if (!l.segs) return;
+      const m = by.get(shifts[i]);
+      for (const s of l.segs) {
+        if (!s.c) continue;
+        const ch = parseChord(s.c);
+        if (!ch || ch.special || ch.bassOnly) continue;
+        const n = sounding.get(s.c);
+        m.set(n, (m.get(n) || 0) + 1);
+      }
+    });
+    return by;
+  }, [parsed, modulation, sounding]);
+
   const capoRank = useMemo(() => {
     if (instrument !== 'guitar') return null;
-    const counts = new Map();
-    for (const [c, n] of stats.count) {
-      const k = sounding.get(c);
-      counts.set(k, (counts.get(k) || 0) + n);
+    // 転調でカポを付けかえるときは、出だしの調の部分だけでカポ位置を選ぶ
+    let counts = follow && countsBy.get(0)?.size ? countsBy.get(0) : null;
+    if (!counts) {
+      counts = new Map();
+      for (const [c, n] of stats.count) {
+        const k = sounding.get(c);
+        counts.set(k, (counts.get(k) || 0) + n);
+      }
     }
     return rankCapos(counts, soundKey, { easy, maxCapo: prefs.maxCapo });
-  }, [instrument, stats, sounding, easy, prefs.maxCapo, soundKey.pc, soundKey.minor]);
+  }, [instrument, stats, sounding, countsBy, follow, easy, prefs.maxCapo, soundKey.pc, soundKey.minor]);
 
   const capo = instrument === 'guitar' ? (typeof st.capo === 'number' ? Math.min(st.capo, prefs.maxCapo) : capoRank.best) : 0;
   const shapeKey = shiftKey(soundKey, -capo);
 
-  // 画面に出すコード名
-  const display = useMemo(() => {
+  // ずれごとのカポ。付けかえれば同じ形で弾ける位置(上げる/下げる)があればそこ、
+  // 届かないときは、その部分だけで一番弾きやすい位置
+  const segCapo = useMemo(() => {
     const m = new Map();
-    for (const c of stats.order) {
-      const snd = sounding.get(c);
-      m.set(c, instrument === 'guitar' ? shapeName(snd, capo, shapeKey, easy) : snd);
+    for (const k of shiftSet) {
+      if (instrument !== 'guitar') m.set(k, 0);
+      else if (k === 0 || !follow) m.set(k, capo);
+      else {
+        const s = k > 6 ? k - 12 : k;
+        const same = [capo + s, capo + s - 12, capo + s + 12].find((c) => c >= 0 && c <= capoLimit);
+        m.set(k, same ?? rankCapos(countsBy.get(k), shiftKey(soundKey, k), { easy, maxCapo: prefs.maxCapo }).best);
+      }
     }
     return m;
-  }, [stats, sounding, instrument, capo, easy, shapeKey.pc]);
+  }, [shiftSet, instrument, follow, capo, capoLimit, countsBy, easy, prefs.maxCapo, soundKey.pc, soundKey.minor]);
 
+  // 画面に出すコード名(ずれごと)。ギターはカポをつけて押さえる形、ピアノは実際に鳴る音
+  const nameMaps = (withEasy) => {
+    const out = new Map();
+    for (const k of shiftSet) {
+      const c = segCapo.get(k);
+      const sk = shiftKey(soundKey, k - c);
+      const m = new Map();
+      for (const t of stats.order) {
+        const snd = sounding.get(t);
+        m.set(t, instrument === 'guitar' ? shapeName(snd, c, sk, withEasy) : snd);
+      }
+      out.set(k, m);
+    }
+    return out;
+  };
+  const displays = useMemo(() => nameMaps(easy), [shiftSet, segCapo, stats, sounding, instrument, easy, soundKey.pc, soundKey.minor]);
+  const display = displays.get(0) || displays.values().next().value;
   // かんたんモードで置き換える前の形の名前(置き換えたコードの説明に使う)
-  const plainDisplay = useMemo(() => {
-    const m = new Map();
-    if (instrument !== 'guitar') return m;
-    for (const c of stats.order) m.set(c, shapeName(sounding.get(c), capo, shapeKey, false));
-    return m;
-  }, [stats, sounding, instrument, capo, shapeKey.pc]);
+  const plainDisplays = useMemo(() => (instrument === 'guitar' ? nameMaps(false) : new Map()), [shiftSet, segCapo, stats, sounding, instrument, soundKey.pc, soundKey.minor]);
 
   // コードごとに見せる押さえ方。通常は教本どおり、かんたんモードは曲の流れ(前後のコード)まで見て選ぶ。
   // 「いつもこの形」で自分で選んだ形があれば、それがいちばん優先
   const autoFrets = useMemo(() => {
     if (instrument !== 'guitar') return new Map();
     const seq = [];
-    for (const l of parsed.lines) if (l.segs) for (const s of l.segs) if (s.c) {
-      const n = display.get(s.c);
-      if (n && /^[A-G]/.test(n)) seq.push(n);
-    }
+    parsed.lines.forEach((l, i) => {
+      if (!l.segs) return;
+      const d = displays.get(shifts[i]);
+      for (const s of l.segs) {
+        const n = s.c && d.get(s.c);
+        if (n && /^[A-G]/.test(n)) seq.push(n);
+      }
+    });
     return planVoicings(seq, easy);
-  }, [parsed, display, instrument, easy]);
+  }, [parsed, displays, modulation, instrument, easy]);
 
   // かんたんモードで変わったところ(置き換えたコード・省略形にしたコード)
   const eased = useMemo(() => {
     if (!easy) return [];
     const out = [];
     const seen = new Set();
-    for (const c of stats.order) {
-      const from = plainDisplay.get(c);
-      const to = display.get(c);
-      if (!from || !/^[A-G]/.test(to) || seen.has(from)) continue;
-      seen.add(from);
-      const std = standardVoicing(from);
-      if (from !== to) out.push({ from, to, kind: 'name' });
-      else if (std && autoFrets.get(to) && autoFrets.get(to) !== std.frets.join(',')) out.push({ from, to, kind: std.barre ? 'short' : 'form' });
+    for (const k of shiftSet) {
+      for (const c of stats.order) {
+        if (!countsBy.get(k)?.has(sounding.get(c))) continue;
+        const from = plainDisplays.get(k)?.get(c);
+        const to = displays.get(k).get(c);
+        if (!from || !/^[A-G]/.test(to) || seen.has(from)) continue;
+        seen.add(from);
+        const std = standardVoicing(from);
+        if (from !== to) out.push({ from, to, kind: 'name' });
+        else if (std && autoFrets.get(to) && autoFrets.get(to) !== std.frets.join(',')) out.push({ from, to, kind: std.barre ? 'short' : 'form' });
+      }
     }
     return out;
-  }, [easy, stats, plainDisplay, display, autoFrets]);
+  }, [easy, shiftSet, stats, countsBy, sounding, plainDisplays, displays, autoFrets]);
 
-  // ベース音だけの指定(/G# など)は一覧に出さない
-  const uniqueDisplay = useMemo(() => [...new Set(stats.order.map((c) => display.get(c)))].filter((n) => /^[A-G]/.test(n)), [stats, display]);
+  // 転調の印(行番号 → 中身)
+  const modMarks = useMemo(() => {
+    const m = new Map();
+    for (const mk of modulation.marks) {
+      const fromCapo = segCapo.get(mk.from);
+      const toCapo = segCapo.get(mk.to);
+      m.set(mk.at, {
+        shift: mk.shift,
+        fromKey: keyName(shiftKey(soundKey, mk.from)),
+        toKey: keyName(shiftKey(soundKey, mk.to)),
+        fromCapo,
+        toCapo,
+        sameShapes: (((toCapo - fromCapo - mk.shift) % 12) + 12) % 12 === 0,
+        follow,
+      });
+    }
+    return m;
+  }, [modulation, segCapo, follow, soundKey.pc, soundKey.minor]);
+
+  // ベース音だけの指定(/G# など)は一覧に出さない。転調したところのコードも含めて、出てくる順に
+  const uniqueDisplay = useMemo(() => {
+    const seen = new Set();
+    parsed.lines.forEach((l, i) => {
+      if (!l.segs) return;
+      const d = displays.get(shifts[i]);
+      for (const s of l.segs) if (s.c) seen.add(d.get(s.c));
+    });
+    return [...seen].filter((n) => n && /^[A-G]/.test(n));
+  }, [parsed, displays, modulation]);
 
   const sheetBpm = song.sheet.bpm || parsed.meta.bpm || null; // 譜面に書かれたテンポ({tempo} など)
   const bpm = st.bpm || sheetBpm || 90;
@@ -298,7 +381,23 @@ function SongReady({ song, reload }) {
 
   // 区間リピートの区間選び: null → { step: 'from' } → { step: 'to', from }
   const [loopSel, setLoopSel] = useState(null);
-  const onChord = useCallback((token) => setChordTap(token), []);
+  const onChord = useCallback((token, line) => setChordTap({ token, line }), []);
+  // タップしたコードの名前(転調したところはそのカポでの形)・実際に鳴る音・置き換える前の名前
+  const tapInfo = useMemo(() => {
+    if (!chordTap) return null;
+    if (chordTap.display) {
+      const name = chordTap.display;
+      let plain = null;
+      if (easy)
+        for (const [k, d] of displays) {
+          for (const [t, n] of d) if (n === name) { plain = plainDisplays.get(k)?.get(t) || null; break; }
+          if (plain) break;
+        }
+      return { name, snd: null, plain };
+    }
+    const k = shifts[chordTap.line] ?? 0;
+    return { name: displays.get(k)?.get(chordTap.token) || chordTap.token, snd: sounding.get(chordTap.token), plain: easy ? plainDisplays.get(k)?.get(chordTap.token) || null : null };
+  }, [chordTap, displays, plainDisplays, sounding, easy, modulation]);
   const onLineTap = useCallback(
     (i) => {
       const line = parsed.lines[i];
@@ -348,6 +447,22 @@ function SongReady({ song, reload }) {
   const userPicks = prefs.voicingPick || {};
   const picks = useMemo(() => ({ ...Object.fromEntries(autoFrets), ...userPicks }), [autoFrets, userPicks]);
 
+  const easyToggled = useRef(false);
+  const toggleEasy = () => {
+    easyToggled.current = true;
+    setSt({ easy: !easy });
+  };
+  useEffect(() => {
+    if (!easyToggled.current) return;
+    easyToggled.current = false;
+    if (!easy) toast('教本どおりの押さえ方にしました');
+    else if (!eased.length) toast('この曲は、もとから押さえやすいコードばかりです');
+    else {
+      const say = eased.slice(0, 2).map((e) => (e.kind === 'name' ? `${pretty(e.from)}→${pretty(e.to)}` : `${pretty(e.from)}は${e.kind === 'short' ? '省略形' : '押さえやすい形'}`));
+      toast(`かんたんモード: ${say.join('、')}${eased.length > 2 ? ` ほか${eased.length - 2}つ` : ''}`);
+    }
+  }, [easy, eased]);
+
   const capoLabel = instrument === 'guitar' ? (capo === 0 ? 'カポなし' : `カポ ${capo}`) : null;
   const flatForShape = keyPrefersFlat(shapeKey);
 
@@ -370,8 +485,15 @@ function SongReady({ song, reload }) {
         : null}
       <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
       <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
-        キー ${transpose === 0 ? '原曲' : signed(transpose)}
+        <span className="lbl-long">キー ${transpose === 0 ? '原曲' : signed(transpose)}</span>
+        <span className="lbl-short">${transpose === 0 ? 'キー' : `キー ${signed(transpose)}`}</span>
       </button>
+      ${instrument === 'guitar'
+        ? html`<button className=${cx('chip mode-chip', easy && 'is-on')} aria-pressed=${easy} onClick=${toggleEasy} aria-label=${easy ? '押さえ方: かんたん（押すと教本どおり）' : '押さえ方: 教本どおり（押すとかんたん）'}>
+            <span className="lbl-long">${easy ? 'かんたん' : '教本どおり'}</span>
+            <span className="lbl-short">${easy ? '簡単' : '教本'}</span>
+          </button>`
+        : null}
     </div>
 
     <div className="song-body">
@@ -386,7 +508,7 @@ function SongReady({ song, reload }) {
                   : html`<b>Key ${keyName(soundKey)}</b>`}
               </div>
               <div className="muted small">
-                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''} ・ ♩=${bpm}${bpmKnown ? '' : '(仮)'} ・ ${sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
+                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmKnown ? '' : '(仮)'} ・ ${sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
               </div>
             </div>
           </div>
@@ -398,6 +520,10 @@ function SongReady({ song, reload }) {
           <${SheetLines}
             lines=${parsed.lines}
             display=${display}
+            displays=${displays}
+            shifts=${shifts}
+            marks=${modMarks}
+            onMark=${() => setSt({ capoFollow: !follow })}
             instrument=${instrument}
             inline=${inline}
             showBars=${prefs.showBars}
@@ -446,7 +572,7 @@ function SongReady({ song, reload }) {
       onLoop=${toggleLoop}
     />
 
-    <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} easy=${easy} eased=${eased} />
+    <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} easy=${easy} eased=${eased} hasMod=${hasMod} follow=${follow} />
     <${KeyPanel} open=${panel === 'key'} onClose=${() => setPanel(null)} transpose=${transpose} origKey=${origKey} setSt=${setSt} instrument=${instrument} />
     <${TempoPanel}
       open=${panel === 'tempo'}
@@ -466,15 +592,13 @@ function SongReady({ song, reload }) {
     <${TunerSheet} open=${panel === 'tuner'} onClose=${() => setPanel(null)} />
     <${ChordPanel}
       tap=${chordTap}
+      info=${tapInfo}
       onClose=${() => setChordTap(null)}
-      display=${display}
-      sounding=${sounding}
       instrument=${instrument}
       noteStyle=${prefs.noteStyle}
       flat=${instrument === 'guitar' ? flatForShape : soundFlat}
       picks=${userPicks}
       shown=${picks}
-      plainDisplay=${plainDisplay}
       easy=${easy}
     />
   </div>`;
@@ -534,11 +658,11 @@ function sectionOf(lines, i) {
   return from < 0 ? null : { from, to };
 }
 
-const SheetLines = memo(function SheetLines({ lines, display, instrument, inline, showBars, onChord, onLine, onLabel = null, loop = null, selecting = false, picks = null }) {
+const SheetLines = memo(function SheetLines({ lines, display, displays = null, shifts = null, marks = null, onMark = null, instrument, inline, showBars, onChord, onLine, onLabel = null, loop = null, selecting = false, picks = null }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
     fitLines(ref.current);
-  }, [lines, display, instrument, inline, showBars]);
+  }, [lines, display, displays, marks, instrument, inline, showBars]);
   // 画面の幅や文字の大きさが変わったら測り直す(高さだけの変化では測り直さない)
   useEffect(() => {
     const el = ref.current;
@@ -563,7 +687,12 @@ const SheetLines = memo(function SheetLines({ lines, display, instrument, inline
     };
   }, []);
   return html`<div className=${cx('sheet-lines', selecting && 'is-selecting')} ref=${ref}>
-    ${lines.map((l, i) => html`<${Line} key=${i} i=${i} line=${l} display=${display} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} onLabel=${onLabel} selecting=${selecting} picks=${picks} loopMark=${!loop || i < loop.from || i > loop.to ? '' : cx('in-loop', i === loop.from && 'loop-start', i === loop.to && 'loop-end')} />`)}
+    ${lines.map((l, i) => {
+      const mk = marks?.get(i);
+      const d = (displays && shifts && displays.get(shifts[i])) || display;
+      const row = html`<${Line} key=${i} i=${i} line=${l} display=${d} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} onLabel=${onLabel} selecting=${selecting} picks=${picks} loopMark=${!loop || i < loop.from || i > loop.to ? '' : cx('in-loop', i === loop.from && 'loop-start', i === loop.to && 'loop-end')} />`;
+      return mk ? [html`<${ModMark} key=${'m' + i} mark=${mk} instrument=${instrument} onToggle=${onMark} />`, row] : row;
+    })}
   </div>`;
 });
 
@@ -586,7 +715,7 @@ const Line = memo(function Line({ line, i, display, instrument, inline, showBars
           ? html`<span className="ch">
               ${s.bar && showBars ? html`<i className="bar" aria-hidden="true"></i>` : null}
               ${s.c
-                ? html`<button className="chord" onClick=${(e) => { if (selecting) return; e.stopPropagation(); onChord(s.c); }}>
+                ? html`<button className="chord" onClick=${(e) => { if (selecting) return; e.stopPropagation(); onChord(s.c, i); }}>
                     ${inline && /^[A-G]/.test(name) ? html`<${MiniDiagram} name=${name} instrument=${instrument} pick=${picks?.[name]} />` : null}
                     <span className="chord-name"><${ChordText} name=${pretty(name)} /></span>
                   </button>`
@@ -598,6 +727,28 @@ const Line = memo(function Line({ line, i, display, instrument, inline, showBars
     })}
   </div>`;
 });
+
+// 転調の印: 「転調 +2（Key G → A）カポ 2 → 4 に付けかえ（押さえ方はそのまま）」
+function ModMark({ mark, instrument, onToggle }) {
+  const capoTxt = (c) => (c === 0 ? 'カポなし' : `カポ ${c}`);
+  let body = null;
+  if (instrument === 'guitar') {
+    if (!mark.follow)
+      body = html`<span>カポはそのまま（コードの形が変わります）</span>
+        <button className="mod-mark-btn" onClick=${onToggle}>カポを付けかえる</button>`;
+    else if (mark.toCapo === mark.fromCapo) body = html`<span>カポはそのまま（コードの形が変わります）</span>`;
+    else
+      body = html`<span><b>${capoTxt(mark.fromCapo)} → ${capoTxt(mark.toCapo)}</b> に付けかえ${mark.sameShapes ? '（押さえ方はそのまま）' : '（コードの形が少し変わります）'}</span>
+        <button className="mod-mark-btn" onClick=${onToggle}>付けかえない</button>`;
+  }
+  return html`<div className=${cx('mod-mark', mark.shift > 0 ? 'is-up' : 'is-down')} role="note">
+    <div className="mod-mark-head">
+      <span className="mod-mark-arrow" aria-hidden="true">${mark.shift > 0 ? '↑' : '↓'}</span>
+      転調 ${signed(mark.shift)}<small>（Key ${mark.fromKey} → ${mark.toKey}）</small>
+    </div>
+    ${body ? html`<div className="mod-mark-body">${body}</div>` : null}
+  </div>`;
+}
 
 // 編集画面のプレビュー用(コード名はそのまま)
 export function SheetPreview({ lines }) {
@@ -651,7 +802,7 @@ function Transport({ scroll, bpm, bpmKnown, beatsPerBar, click, onClick, onTempo
 
 // ---------------------------------------------------------------- パネル類
 
-function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, easy, eased }) {
+function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, easy, eased, hasMod = false, follow = false }) {
   if (!rank) return null;
   // 出てくる回数の多いコードから5つを見本として出す
   const top = [...stats.count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c]) => sounding.get(c));
@@ -688,6 +839,16 @@ function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, ea
           : html`<p className="mode-note is-quiet">この曲は、もとから押さえやすいコードばかりなので、置き換えるところはありません。</p>`
         : null}
     </div>
+    ${hasMod
+      ? html`<div className="panel-switch">
+          <${Switch}
+            label="転調したらカポを付けかえる"
+            hint="転調のところでカポを上げ下げして、それまでと同じ押さえ方で弾けるようにします（譜面に印が出ます）"
+            checked=${follow}
+            onChange=${(v) => setSt({ capoFollow: v })}
+          />
+        </div>`
+      : null}
     <p className="panel-lead">バーが長いほど押さえやすいカポ位置です。「自動」なら一番弾きやすい位置を選び続けます。</p>
     <button className=${cx('capo-row', auto && 'is-on')} onClick=${() => { setSt({ capo: null }); onClose(); }}>
       <span className="capo-name">自動</span>
@@ -842,17 +1003,12 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
   </${Sheet}>`;
 }
 
-function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, flat, picks, shown = {}, plainDisplay = null, easy = false }) {
+// info: { name: 画面のコード名, snd: 実際に鳴る音, plain: かんたんモードで置き換える前の名前 }
+function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, shown = {}, easy = false }) {
   const [idx, setIdx] = useState(0);
-  const name = tap ? (typeof tap === 'string' ? display.get(tap) : tap.display) : null;
-  const snd = tap && typeof tap === 'string' ? sounding.get(tap) : null;
-  // かんたんモードで置き換える前のコード名
-  const plain =
-    !easy || !plainDisplay || !tap
-      ? null
-      : typeof tap === 'string'
-        ? plainDisplay.get(tap)
-        : [...plainDisplay.entries()].find(([k]) => display.get(k) === name)?.[1] || null;
+  const name = info?.name || null;
+  const snd = info?.snd || null;
+  const plain = info?.plain || null;
   // 押さえ方の並び: 通常モードは教本の形を先頭に、かんたんモードは押さえやすい順
   const orderOf = (n) => {
     const a = guitarVoicings(n);
