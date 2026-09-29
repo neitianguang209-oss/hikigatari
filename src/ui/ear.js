@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon, PlayIcon } from './icons.js';
 import { Artwork, ChordText, toast } from './common.js';
-import { analyzeAudio, barsToSheet, toMono, resample, liveChord, SR } from '../music/earcopy.js';
+import { analyzeAudio, barsToSheet, toMonoHQ, resample, liveChord, SR } from '../music/earcopy.js';
 import { pretty, keyName } from '../music/chord.js';
 import { lib } from '../lib/store.js';
 import { go, back } from '../lib/router.js';
@@ -101,7 +101,7 @@ export function EarCopy({ params }) {
       setTrack(it);
       setStage({ p: 0, text: '試聴を読み込んでいます' });
       const buf = await decode(await (await fetch(it.previewUrl)).arrayBuffer());
-      await run(toMono(buf), buf, '試聴30秒');
+      await run(await toMonoHQ(buf), buf, '試聴30秒');
     } catch (e) {
       setStage(null);
       setError(e.message || '試聴を読み込めませんでした');
@@ -114,7 +114,7 @@ export function EarCopy({ params }) {
     setStage({ p: 0, text: 'ファイルを読み込んでいます' });
     try {
       const buf = await decode(await file.arrayBuffer());
-      await run(toMono(buf), buf, 'ファイル');
+      await run(await toMonoHQ(buf), buf, 'ファイル');
     } catch {
       setStage(null);
       setError('このファイルは読み込めませんでした（mp3・m4a・wav などの音のファイルを選んでください）');

@@ -265,7 +265,7 @@ const TYPES = [
   // 4和音は、歌のメロディが7度に来ただけで選ばれやすいので控えめに(はっきり鳴っているときだけ)
   { suf: '7', iv: [0, 4, 7, 10], w: [1, 1, 0.8, 0.75], prior: -0.055 },
   { suf: 'm7', iv: [0, 3, 7, 10], w: [1, 1, 0.8, 0.75], prior: -0.06 },
-  { suf: 'M7', iv: [0, 4, 7, 11], w: [1, 1, 0.8, 0.6], prior: -0.09 },
+  { suf: 'M7', iv: [0, 4, 7, 11], w: [1, 1, 0.8, 0.6], prior: -0.11 },
   { suf: 'sus4', iv: [0, 5, 7], w: [1, 1, 0.8], prior: -0.07 },
 ];
 const TEMPLATES = [];
@@ -415,7 +415,7 @@ function profileKeyScores(feats) {
 }
 
 // キー(長調の主音)を決める: 長く鳴っているコードが自然に収まる調 + 12音の分布が合う調
-function keyFromPath(path, feats) {
+function keyFromPath(path, feats, pw = 0.15) {
   const prof = profileKeyScores(feats);
   const n = path.filter((s) => s < TEMPLATES.length).length || 1;
   let best = 0;
@@ -429,7 +429,7 @@ function keyFromPath(path, feats) {
       const ok = DIATONIC[d];
       v += ok && ok.includes(tp.type) ? 1 : (d === 2 || d === 4 || d === 9) && tp.type === 0 ? 0.3 : 0;
     }
-    v = v / n + 0.6 * prof[T];
+    v = v / n + pw * prof[T];
     if (v > bestV) {
       bestV = v;
       best = T;
@@ -451,7 +451,7 @@ function keyFromPath(path, feats) {
 // ---------------------------------------------------------------- 全体
 
 // samples: 11025Hz のモノラル音。progress(0〜1, 今している作業)
-export async function analyzeAudio(samples, { progress = () => {} } = {}) {
+export async function analyzeAudio(samples, { progress = () => {}, keyWeight = 0.15 } = {}) {
   // 音量をそろえる
   let peak = 0;
   for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
@@ -476,7 +476,7 @@ export async function analyzeAudio(samples, { progress = () => {} } = {}) {
   // 1回目: キーを気にせず並べる → キーを決める → 2回目: 小節の頭を探す → 3回目: 仕上げ
   const flat = (cost) => () => cost;
   const p1 = viterbi(scoreBeats(feats, null), flat(0.12));
-  const key = keyFromPath(p1, feats);
+  const key = keyFromPath(p1, feats, keyWeight);
   const sc = scoreBeats(feats, key.T);
   const p2 = viterbi(sc, flat(0.12));
   // コードの変わり目が一番そろう位置を「小節の頭」とする(4拍子)
@@ -547,6 +547,22 @@ export function toMono(buffer) {
     for (let i = 0; i < len; i++) mono[i] += d[i] / ch;
   }
   return resample(mono, buffer.sampleRate);
+}
+
+// ブラウザの高品質な変換で 11025Hz のモノラルにする(使えないときは toMono)
+export async function toMonoHQ(buffer) {
+  try {
+    const len = Math.ceil(buffer.duration * SR);
+    const off = new OfflineAudioContext(1, len, SR);
+    const src = off.createBufferSource();
+    src.buffer = buffer;
+    src.connect(off.destination);
+    src.start();
+    const out = await off.startRendering();
+    return out.getChannelData(0);
+  } catch {
+    return toMono(buffer);
+  }
 }
 
 // 区間の平均をとって間引く(簡単な低域フィルタを兼ねる)
