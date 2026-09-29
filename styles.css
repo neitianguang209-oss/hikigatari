@@ -2652,3 +2652,93 @@ html,
     margin-bottom: 8px;
   }
 }
+
+/* ---------------------------------------------------------------- 弾き方(通常 / かんたん) */
+
+.mode-box {
+  background: var(--bg);
+  border-radius: 14px;
+  padding: 10px;
+  margin-bottom: 14px;
+}
+.mode-box .segmented {
+  display: flex;
+  width: 100%;
+}
+.mode-box .seg-btn {
+  flex: 1;
+  justify-content: center;
+}
+.mode-note {
+  margin: 10px 4px 2px;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.mode-note.is-quiet {
+  margin-top: 8px;
+}
+.eased-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 2px 2px;
+}
+.eased-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.eased-item b {
+  font: 700 0.98rem var(--chord-font);
+  color: var(--muted);
+}
+.eased-item b.to {
+  color: var(--chord);
+}
+.eased-item i {
+  font-style: normal;
+  color: var(--muted);
+}
+.eased-item small {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.easy-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font: 700 0.72rem/1.6 var(--font);
+  vertical-align: 0.15em;
+  cursor: pointer;
+}
+.eased-note {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.eased-note b {
+  font-family: var(--chord-font);
+  font-size: 1.05em;
+}
+.voicing-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}

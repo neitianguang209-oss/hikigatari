@@ -5,7 +5,34 @@ const TUNING = [40, 45, 50, 55, 59, 64]; // 6弦 → 1弦 (E A D G B E)
 const mod12 = (n) => ((n % 12) + 12) % 12;
 
 // よく使う形は、教本どおりの押さえ方を優先する [名前, フレット(6弦→1弦), 指番号(T=親指)]
+// 同じコードが複数あるときは、先に書いたものが「標準の形」(通常モードで出す形)。
+// 後ろの形(省略形など)は、かんたんモードで押さえやすさを比べる候補になる
 const CURATED = [
+  // 標準の形(バレーコードは教本どおりのセーハ)
+  ['Bm7', 'x24232', 'x13121'],
+  ['Gm', '355333', '134111'],
+  ['Cm', 'x35543', 'x13421'],
+  ['Gm7', '353333', '131111'],
+  ['Cm7', 'x35343', 'x13141'],
+  ['Fm7', '131111', '131111'],
+  ['Bbm', 'x13321', 'x13421'],
+  ['Ebm', 'x68876', 'x13421'],
+  ['Eb', 'x68886', 'x13331'],
+  ['Ab', '466544', '134211'],
+  ['Db', 'x46664', 'x13331'],
+  ['F#', '244322', '134211'],
+  ['F#7', '242322', '131211'],
+  ['C#7', 'x46464', 'x13141'],
+  ['Bb7', 'x13131', 'x13141'],
+  ['BM7', 'x24342', 'x13241'],
+  ['F#m7-5', '2x221x', '2x341x'],
+  ['Dm7-5', 'xx0111', 'xx0111'],
+  ['Gsus4', '330013', '230014'],
+  ['Csus4', 'x33011', 'x34011'],
+  ['C/E', '032010', '032010'],
+  ['D/A', 'x00232', 'x00132'],
+  ['G6', '320000', '210000'],
+  ['C6', 'x32210', 'x42310'],
   ['C', 'x32010', 'x32010'],
   ['Cadd9', 'x32030', 'x21030'],
   ['CM7', 'x32000', 'x32000'],
@@ -55,6 +82,28 @@ const CURATED = [
   ['C#m7', 'x46454', 'x13121'],
   ['G#m', '466444', '134111'],
   ['Bm7-5', 'x2323x', 'x1324x'],
+  ['E/G#', '4x2100', '4x2100'],
+  // 省略形(セーハを減らした形)。かんたんモードの候補
+  ['F', 'xx3211', 'xx3211'],
+  ['Fm', 'xx3111', 'xx3111'],
+  ['F7', 'xx1211', 'xx1211'],
+  ['Fm7', 'xx1111', 'xx1111'],
+  ['Bm', 'xx4432', 'xx3421'],
+  ['B', 'xx4442', 'xx2341'],
+  ['Bb', 'xx3331', 'xx2341'],
+  ['Bbm', 'xx3321', 'xx3421'],
+  ['F#m', 'xx4222', 'xx3111'],
+  ['F#m7', 'xx2222', 'xx1111'],
+  ['F#', 'xx4322', 'xx3211'],
+  ['C#m', 'xx2120', 'xx2130'],
+  ['C#m7', 'x42100', 'x32100'],
+  ['Db', 'xx3121', 'xx3121'],
+  ['Eb', 'xx1343', 'xx1243'],
+  ['Ab', 'xx6544', 'xx3211'],
+  ['G#m', 'xx6444', 'xx3111'],
+  ['Gm', 'xx5333', 'xx3111'],
+  ['Gm7', 'xx3333', 'xx1111'],
+  ['Cm', 'xx5543', 'xx3421'],
 ];
 
 // 同じ構成音なら表記が違っても同じ形を使えるよう、構成音で引く
@@ -216,46 +265,101 @@ function voicingScore(v, hasFifth) {
 // 弾きにくさ(大きいほど難しい)。カポ位置の比較と「かんたんコード」の判断に使う
 export function voicingDifficulty(v) {
   if (!v) return 9;
-  const barre = v.barre ? (v.barre.full ? 2.2 : 0.9) : 0;
-  let d = 0.5 * v.nFingers + barre + 0.35 * v.span + 1.2 * v.innerMutes + (v.minF >= 5 ? 0.3 : 0);
+  // 一部の弦だけのセーハ(小さい F の1・2弦など)も、はじめのうちはかなり難しい
+  const barre = v.barre ? (v.barre.full ? 2.2 : 1.3) : 0;
+  let d = 0.5 * v.nFingers + barre + 0.35 * v.span + 1.2 * v.innerMutes + (v.minF >= 5 ? 0.3 + 0.08 * (v.minF - 5) : 0);
   d += 0.15 * v.leadMutes + 0.9 * v.trailMutes + (v.sounding < 4 ? 1.5 : v.sounding === 4 ? 0.3 : 0);
   if (v.fingers.includes('T')) d += 0.8;
+  // 同じフレットのとなり合う3本の弦を、別々の指で押さえる形(小さい B など)は窮屈
+  let run = 1;
+  for (let i = 1; i < 6; i++) {
+    const f = v.frets[i];
+    if (f > 0 && f === v.frets[i - 1] && v.fingers[i] !== v.fingers[i - 1]) {
+      if (++run === 3) d += 0.6;
+    } else run = 1;
+  }
   return d;
+}
+
+// 教本に載っていないコードの「標準の形」の選び方: セーハは減点しない。
+// 6弦・5弦から全部の弦を鳴らす、低いフレットの形を選ぶ(ふつうに習う押さえ方)
+function standardScore(v) {
+  return (
+    1.5 * v.innerMutes + 1.0 * v.trailMutes + 0.15 * v.leadMutes - 0.35 * v.sounding + 0.25 * v.minF + 0.3 * v.span +
+    (v.fingers.includes('T') ? 0.6 : 0) + (v.nFingers > 4 ? 5 : 0)
+  );
+}
+
+// かんたんモードで並べる順(小さいほど先)。教本・定番の省略形を優先し、見慣れない形は後ろへ。
+// 見慣れない形 = 押さえた弦(3フレット以上)ではさまれた開放弦がある・4フレットより上の形に開放弦がまざる
+export function easeRank(v) {
+  let r = voicingDifficulty(v);
+  if (v.curated) return r - 0.8;
+  const fr = v.frets;
+  for (let i = 1; i < 5; i++) {
+    if (fr[i] !== 0) continue;
+    let l = -1;
+    let rr = -1;
+    for (let k = i - 1; k >= 0; k--) if (fr[k] > 0) { l = fr[k]; break; }
+    for (let k = i + 1; k < 6; k++) if (fr[k] > 0) { rr = fr[k]; break; }
+    if (l > 0 && rr > 0 && Math.max(l, rr) >= 3) r += 0.5;
+  }
+  if (v.opens && v.minF >= 4) r += 0.6;
+  r += 0.4 * v.trailMutes; // 1弦側を鳴らさない形は、ストロークでつい鳴らしてしまう
+  return r;
 }
 
 const voicingCache = new Map();
 
-// そのコードの押さえ方の候補(弾きやすい順)
+// そのコードの押さえ方の候補(弾きやすい順)。標準の形には standard: true が付く
 export function guitarVoicings(name) {
   if (voicingCache.has(name)) return voicingCache.get(name);
   const ch = parseChord(name);
   let list = [];
   if (ch && !ch.special && !ch.bassOnly) {
     const cur = curated().get(signature(ch)) || [];
-    const gen = searchVoicings(ch).slice(0, 12);
+    const gen = searchVoicings(ch).slice(0, 16);
     const seen = new Set();
     for (const v of [...cur.map((x) => ({ ...x, curated: true })), ...gen]) {
       const k = v.frets.join(',');
       if (seen.has(k)) continue;
       seen.add(k);
-      list.push(v);
+      list.push({ ...v });
     }
+    // 標準の形: 教本の形があればその先頭、無ければ standardScore が一番小さい形
+    const std = list.find((v) => v.curated) || [...list].sort((a, b) => standardScore(a) - standardScore(b))[0];
+    if (std) std.standard = true;
     // やさしい順。教本の形は少しだけ優先する(見慣れた形のほうが覚えやすい)。
-    // 教本の形(Bm のセーハなど)は難しくても必ず候補に残す
-    const rank = (v) => voicingDifficulty(v) - (v.curated ? 0.5 : 0);
-    list = list.sort((a, b) => rank(a) - rank(b)).filter((v, i) => i < 8 || v.curated);
+    // 教本の形・標準の形(Bm のセーハなど)は難しくても必ず候補に残す
+    list = list.sort((a, b) => easeRank(a) - easeRank(b)).filter((v, i) => i < 8 || v.curated || v.standard);
   }
   voicingCache.set(name, list);
   return list;
 }
 
+// 通常モードで出す形(教本どおり。F や B はセーハ)
+export function standardVoicing(name) {
+  const vs = guitarVoicings(name);
+  return vs.find((v) => v.standard) || vs[0] || null;
+}
+
 const diffCache = new Map();
+// いちばんやさしい形の難しさ(かんたんモードの比較に使う)
 export function chordDifficulty(name) {
   if (diffCache.has(name)) return diffCache.get(name);
   const vs = guitarVoicings(name);
-  // 図で最初に見せる形(=一番やさしい形)の難しさ
   const d = vs.length ? voicingDifficulty(vs[0]) : 9;
   diffCache.set(name, d);
+  return d;
+}
+
+const stdDiffCache = new Map();
+// 標準の形の難しさ(通常モードでカポ位置を比べるのに使う)
+export function standardDifficulty(name) {
+  if (stdDiffCache.has(name)) return stdDiffCache.get(name);
+  const v = standardVoicing(name);
+  const d = v ? voicingDifficulty(v) : 9;
+  stdDiffCache.set(name, d);
   return d;
 }
 
@@ -282,34 +386,145 @@ function seventhSuffix(ch) {
   return tri;
 }
 
-// 響きをなるべく残したまま、押さえやすい形に置き換える
-export function simplifyForGuitar(name) {
+// かんたんモード: 押さえにくいコードを、響きの近い押さえやすいコードに置き換える。
+// 候補は「分数コードの下の音をやめる」「テンションを外す」「3和音にする」「F→FM7・Bm→Bm7 のように7th系にする」。
+// 置き換えるたびに少しずつ減点し、それでもはっきり押さえやすくなるときだけ置き換える。
+// shapeKey(カポをつけて弾く形のキー)は、M7 と 7 のどちらに寄せるかの判断に使う
+export function easyName(name, shapeKey = null) {
   const ch = parseChord(name);
   if (!ch || ch.special || ch.bassOnly) return name;
+  // もともと押さえやすいコード(開放弦の C・G・A など)は、響きを変えないようにそのまま
+  if (chordDifficulty(name) < 2.9) return name;
   const root = ch.rootName;
-  const triad = root + triadSuffix(ch);
-  const cands = [name, root + ch.suffix, root + seventhSuffix(ch), triad];
-  const base = chordDifficulty(triad);
-  for (const c of cands) {
-    if (!parseChord(c)) continue;
-    if (chordDifficulty(c) <= base + 0.4) return c;
+  const tri = triadSuffix(ch);
+  const cands = [[name, 0]];
+  const add = (n, pen) => {
+    if (parseChord(n) && !cands.some((c) => c[0] === n)) cands.push([n, pen]);
+  };
+  add(root + ch.suffix, 0.25);
+  add(root + seventhSuffix(ch), 0.3);
+  add(root + tri, 0.45);
+  // I・IV(短調なら III・VI)は M7 に、それ以外(属和音やその仲間)は 7 に寄せると響きが崩れにくい
+  const deg = shapeKey ? mod12(ch.root - shapeKey.pc) : null;
+  const restful = deg == null ? true : shapeKey.minor ? deg === 3 || deg === 8 : deg === 0 || deg === 5;
+  if (tri === '' && !ch.st.seventh) {
+    add(root + 'M7', restful ? 0.5 : 1.0);
+    add(root + '7', restful ? 2.5 : 0.6);
   }
-  return triad;
+  if (tri === 'm' && !ch.st.seventh) add(root + 'm7', 0.4);
+  let best = cands[0];
+  let bestCost = chordDifficulty(best[0]);
+  for (const [n, pen] of cands.slice(1)) {
+    const cost = chordDifficulty(n) + pen;
+    if (cost < bestCost - 0.45) {
+      best = [n, pen];
+      bestCost = cost;
+    }
+  }
+  return best[0];
+}
+
+// ---------------------------------------------------------------- 曲を通して押さえ方を選ぶ
+
+// ある形から次の形へ持ちかえる大変さ(フレットの移動・押さえ直す指の数・セーハの付け外し)
+function moveCost(a, b) {
+  const pos = (v) => {
+    const f = v.frets.filter((x) => x > 0);
+    return f.length ? f.reduce((s, x) => s + x, 0) / f.length : 0;
+  };
+  const spots = (v) => new Set(v.frets.map((f, i) => (f > 0 ? `${i}:${f}` : null)).filter(Boolean));
+  const pa = spots(a);
+  const pb = spots(b);
+  let placed = 0;
+  let kept = 0;
+  for (const p of pb) pa.has(p) ? kept++ : placed++;
+  let c = Math.abs(pos(a) - pos(b)) * 0.35 + placed * 0.3 - kept * 0.15;
+  const bw = (v) => (v.barre ? (v.barre.full ? 0.6 : 0.25) : 0);
+  if (!!a.barre !== !!b.barre) c += Math.max(bw(a), bw(b));
+  else if (a.barre && b.barre && a.barre.fret !== b.barre.fret) c += 0.3;
+  return Math.max(0, c);
+}
+
+// 曲に出てくる順のコード名から、コードごとに見せる押さえ方(フレットを","でつないだ文字列)を決める。
+// 通常モード: 教本どおりの標準の形。
+// かんたんモード: 押さえやすさと、前後のコードへの持ちかえやすさの合計が小さくなる組み合わせを選ぶ
+export function planVoicings(seq, easy) {
+  const names = [...new Set(seq)].filter((n) => guitarVoicings(n).length);
+  const plan = new Map();
+  if (!easy) {
+    for (const n of names) plan.set(n, standardVoicing(n).frets.join(','));
+    return plan;
+  }
+  const count = new Map();
+  const pair = new Map(); // "A|B" → 回数(並び順は問わない)
+  for (let i = 0; i < seq.length; i++) {
+    count.set(seq[i], (count.get(seq[i]) || 0) + 1);
+    const a = seq[i];
+    const b = seq[i + 1];
+    if (b == null || a === b) continue;
+    const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+    pair.set(k, (pair.get(k) || 0) + 1);
+  }
+  const nbrs = new Map(names.map((n) => [n, []]));
+  for (const [k, c] of pair) {
+    const [a, b] = k.split('|');
+    if (nbrs.has(a) && nbrs.has(b)) {
+      nbrs.get(a).push([b, c]);
+      nbrs.get(b).push([a, c]);
+    }
+  }
+  // 候補は「いちばん押さえやすい形から大きく離れない形」だけ(つながりのためだけに見慣れない形を選ばない)
+  const cands = new Map(
+    names.map((n) => {
+      const vs = guitarVoicings(n);
+      const lim = easeRank(vs[0]) + 1.0;
+      return [n, vs.filter((v) => easeRank(v) <= lim).slice(0, 5)];
+    }),
+  );
+  const pick = new Map(names.map((n) => [n, cands.get(n)[0]]));
+  const costOf = (n, v) => {
+    let c = (count.get(n) || 1) * easeRank(v);
+    for (const [m, times] of nbrs.get(n)) c += times * moveCost(v, pick.get(m));
+    return c;
+  };
+  // 1つずつ「ほかを固定して一番よい形」に選び直すのを、変わらなくなるまで繰り返す
+  for (let round = 0; round < 8; round++) {
+    let changed = false;
+    for (const n of names) {
+      let best = pick.get(n);
+      let bestCost = costOf(n, best);
+      for (const v of cands.get(n)) {
+        const c = costOf(n, v);
+        if (c < bestCost - 1e-6) {
+          best = v;
+          bestCost = c;
+        }
+      }
+      if (best !== pick.get(n)) {
+        pick.set(n, best);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  for (const [n, v] of pick) plan.set(n, v.frets.join(','));
+  return plan;
 }
 
 // ---------------------------------------------------------------- カポ
 
-// 実際に鳴るコード名 → カポをつけたときに押さえる形の名前
-export function shapeName(name, capo, shapeKey, simple) {
+// 実際に鳴るコード名 → カポをつけたときに押さえる形の名前(かんたんモードなら置き換え後)
+export function shapeName(name, capo, shapeKey, easy) {
   const ch = parseChord(name);
   if (!ch) return name;
   const flat = shapeKey ? keyPrefersFlat(shapeKey) : false;
   const shaped = chordName(ch, -capo, flat);
-  return simple ? simplifyForGuitar(shaped) : shaped;
+  return easy ? easyName(shaped, shapeKey) : shaped;
 }
 
-// カポ 0〜maxCapo それぞれの弾きやすさを採点する
-export function rankCapos(counts, soundingKey, { simple = true, maxCapo = 7 } = {}) {
+// カポ 0〜maxCapo それぞれの弾きやすさを採点する。
+// 通常モードは標準の形(セーハ込み)、かんたんモードは置き換え後のいちばんやさしい形で比べる
+export function rankCapos(counts, soundingKey, { easy = false, maxCapo = 7 } = {}) {
   const total = [...counts.values()].reduce((a, b) => a + b, 0) || 1;
   const rows = [];
   for (let capo = 0; capo <= maxCapo; capo++) {
@@ -318,8 +533,8 @@ export function rankCapos(counts, soundingKey, { simple = true, maxCapo = 7 } = 
     let hard = 0;
     const shapes = new Map();
     for (const [name, n] of counts) {
-      const sh = shapeName(name, capo, sk, simple);
-      const d = chordDifficulty(sh);
+      const sh = shapeName(name, capo, sk, easy);
+      const d = easy ? chordDifficulty(sh) : standardDifficulty(sh);
       sum += d * n;
       if (d >= 4) hard += n;
       shapes.set(name, sh);

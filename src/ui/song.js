@@ -8,7 +8,7 @@ import { useAutoScroll } from './autoscroll.js';
 import { TunerSheet } from './tuner.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
-import { rankCapos, shapeName, guitarVoicings, voicingDifficulty } from '../music/guitar.js';
+import { rankCapos, shapeName, guitarVoicings, standardVoicing, planVoicings } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { lib, useSong } from '../lib/store.js';
 import { api } from '../lib/api.js';
@@ -124,7 +124,8 @@ function SongReady({ song, reload }) {
   const st = song.settings || {};
   const instrument = st.instrument || prefs.instrument;
   const transpose = st.transpose || 0;
-  const simple = st.simple ?? prefs.simple;
+  // ギターのかんたんモード(オフ = 教本どおりの押さえ方)
+  const easy = instrument === 'guitar' && !!(st.easy ?? prefs.easy);
   // 歌詞の上の図: ギターは押さえ方、ピアノは五線譜。楽器ごとに出す/出さないを覚える
   const inlineKey = instrument === 'guitar' ? 'inline' : 'inlineStaff';
   const inline = instrument === 'guitar' ? st.inline ?? prefs.inlineDiagrams : st.inlineStaff ?? prefs.inlineStaff;
@@ -160,8 +161,8 @@ function SongReady({ song, reload }) {
       const k = sounding.get(c);
       counts.set(k, (counts.get(k) || 0) + n);
     }
-    return rankCapos(counts, soundKey, { simple, maxCapo: prefs.maxCapo });
-  }, [instrument, stats, sounding, simple, prefs.maxCapo, soundKey.pc, soundKey.minor]);
+    return rankCapos(counts, soundKey, { easy, maxCapo: prefs.maxCapo });
+  }, [instrument, stats, sounding, easy, prefs.maxCapo, soundKey.pc, soundKey.minor]);
 
   const capo = instrument === 'guitar' ? (typeof st.capo === 'number' ? Math.min(st.capo, prefs.maxCapo) : capoRank.best) : 0;
   const shapeKey = shiftKey(soundKey, -capo);
@@ -171,10 +172,47 @@ function SongReady({ song, reload }) {
     const m = new Map();
     for (const c of stats.order) {
       const snd = sounding.get(c);
-      m.set(c, instrument === 'guitar' ? shapeName(snd, capo, shapeKey, simple) : snd);
+      m.set(c, instrument === 'guitar' ? shapeName(snd, capo, shapeKey, easy) : snd);
     }
     return m;
-  }, [stats, sounding, instrument, capo, simple, shapeKey.pc]);
+  }, [stats, sounding, instrument, capo, easy, shapeKey.pc]);
+
+  // かんたんモードで置き換える前の形の名前(置き換えたコードの説明に使う)
+  const plainDisplay = useMemo(() => {
+    const m = new Map();
+    if (instrument !== 'guitar') return m;
+    for (const c of stats.order) m.set(c, shapeName(sounding.get(c), capo, shapeKey, false));
+    return m;
+  }, [stats, sounding, instrument, capo, shapeKey.pc]);
+
+  // コードごとに見せる押さえ方。通常は教本どおり、かんたんモードは曲の流れ(前後のコード)まで見て選ぶ。
+  // 「いつもこの形」で自分で選んだ形があれば、それがいちばん優先
+  const autoFrets = useMemo(() => {
+    if (instrument !== 'guitar') return new Map();
+    const seq = [];
+    for (const l of parsed.lines) if (l.segs) for (const s of l.segs) if (s.c) {
+      const n = display.get(s.c);
+      if (n && /^[A-G]/.test(n)) seq.push(n);
+    }
+    return planVoicings(seq, easy);
+  }, [parsed, display, instrument, easy]);
+
+  // かんたんモードで変わったところ(置き換えたコード・省略形にしたコード)
+  const eased = useMemo(() => {
+    if (!easy) return [];
+    const out = [];
+    const seen = new Set();
+    for (const c of stats.order) {
+      const from = plainDisplay.get(c);
+      const to = display.get(c);
+      if (!from || !/^[A-G]/.test(to) || seen.has(from)) continue;
+      seen.add(from);
+      const std = standardVoicing(from);
+      if (from !== to) out.push({ from, to, kind: 'name' });
+      else if (std && autoFrets.get(to) && autoFrets.get(to) !== std.frets.join(',')) out.push({ from, to, kind: std.barre ? 'short' : 'form' });
+    }
+    return out;
+  }, [easy, stats, plainDisplay, display, autoFrets]);
 
   // ベース音だけの指定(/G# など)は一覧に出さない
   const uniqueDisplay = useMemo(() => [...new Set(stats.order.map((c) => display.get(c)))].filter((n) => /^[A-G]/.test(n)), [stats, display]);
@@ -256,7 +294,7 @@ function SongReady({ song, reload }) {
 
   useEffect(() => {
     scroll.measure();
-  }, [instrument, inline, fontScale, capo, simple, transpose]);
+  }, [instrument, inline, fontScale, capo, easy, transpose]);
 
   // 区間リピートの区間選び: null → { step: 'from' } → { step: 'to', from }
   const [loopSel, setLoopSel] = useState(null);
@@ -307,7 +345,8 @@ function SongReady({ song, reload }) {
   const loopRange = loopSel?.step === 'to' ? { from: loopSel.from, to: loopSel.from } : scroll.loop;
 
   // 「いつもこの押さえ方」で選んだ形(コード名 → フレット)
-  const picks = prefs.voicingPick || {};
+  const userPicks = prefs.voicingPick || {};
+  const picks = useMemo(() => ({ ...Object.fromEntries(autoFrets), ...userPicks }), [autoFrets, userPicks]);
 
   const capoLabel = instrument === 'guitar' ? (capo === 0 ? 'カポなし' : `カポ ${capo}`) : null;
   const flatForShape = keyPrefersFlat(shapeKey);
@@ -325,7 +364,7 @@ function SongReady({ song, reload }) {
         ]}
       />
       ${instrument === 'guitar'
-        ? html`<button className="chip" onClick=${() => setPanel('capo')} aria-label="カポとかんたんコード">
+        ? html`<button className="chip" onClick=${() => setPanel('capo')} aria-label="弾き方とカポ">
             ${capoLabel}${typeof st.capo !== 'number' ? html`<small>自動</small>` : null}
           </button>`
         : null}
@@ -343,7 +382,7 @@ function SongReady({ song, reload }) {
             <div className="sheet-meta">
               <div className="sheet-meta-key">
                 ${instrument === 'guitar'
-                  ? html`<b>${capo ? `Capo ${capo}` : 'カポなし'}</b><span>（${keyName(shapeKey)} の形で弾く）</span>`
+                  ? html`<b>${capo ? `Capo ${capo}` : 'カポなし'}</b><span>（${keyName(shapeKey)} の形で弾く）</span>${easy ? html`<button className="easy-tag" onClick=${() => setPanel('capo')}>かんたんモード</button>` : null}`
                   : html`<b>Key ${keyName(soundKey)}</b>`}
               </div>
               <div className="muted small">
@@ -407,7 +446,7 @@ function SongReady({ song, reload }) {
       onLoop=${toggleLoop}
     />
 
-    <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} simple=${simple} />
+    <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} easy=${easy} eased=${eased} />
     <${KeyPanel} open=${panel === 'key'} onClose=${() => setPanel(null)} transpose=${transpose} origKey=${origKey} setSt=${setSt} instrument=${instrument} />
     <${TempoPanel}
       open=${panel === 'tempo'}
@@ -433,7 +472,10 @@ function SongReady({ song, reload }) {
       instrument=${instrument}
       noteStyle=${prefs.noteStyle}
       flat=${instrument === 'guitar' ? flatForShape : soundFlat}
-      picks=${picks}
+      picks=${userPicks}
+      shown=${picks}
+      plainDisplay=${plainDisplay}
+      easy=${easy}
     />
   </div>`;
 }
@@ -609,15 +651,42 @@ function Transport({ scroll, bpm, bpmKnown, beatsPerBar, click, onClick, onTempo
 
 // ---------------------------------------------------------------- パネル類
 
-function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, simple }) {
+function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, easy, eased }) {
   if (!rank) return null;
   // 出てくる回数の多いコードから5つを見本として出す
   const top = [...stats.count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c]) => sounding.get(c));
   const maxAvg = Math.max(...rank.rows.map((r) => r.avg));
   const minAvg = Math.min(...rank.rows.map((r) => r.avg));
-  return html`<${Sheet} open=${open} onClose=${onClose} title="カポとかんたんコード">
-    <div className="panel-switch">
-      <${Switch} label="かんたんコード" hint="押さえにくいコードを、響きの近い押さえやすい形に置き換えます" checked=${simple} onChange=${(v) => setSt({ simple: v })} />
+  return html`<${Sheet} open=${open} onClose=${onClose} title="弾き方とカポ">
+    <div className="mode-box">
+      <${Segmented}
+        label="弾き方"
+        value=${easy ? 'easy' : 'normal'}
+        onChange=${(v) => setSt({ easy: v === 'easy' })}
+        options=${[
+          { value: 'normal', label: '通常（教本どおり）' },
+          { value: 'easy', label: 'かんたん' },
+        ]}
+      />
+      <p className="mode-note">
+        ${easy
+          ? 'バレーコードなど、つっかえやすいところを省略形や響きの近いコードに置き換え、前後のコードへの持ちかえが少ない形を選んでいます。'
+          : 'F や B もバレーコードのまま、教本どおりの押さえ方で出します。弾けるようになりたい形を、そのまま練習できます。'}
+      </p>
+      ${easy
+        ? eased.length
+          ? html`<div className="eased-list" aria-label="かんたんにしたコード">
+              ${eased.map(
+                (e) => html`<span className="eased-item" key=${e.from}>
+                  <b><${ChordText} name=${pretty(e.from)} /></b>
+                  ${e.kind === 'name'
+                    ? html`<i>→</i><b className="to"><${ChordText} name=${pretty(e.to)} /></b>`
+                    : html`<small>${e.kind === 'short' ? '省略形' : '押さえやすい形'}</small>`}
+                </span>`,
+              )}
+            </div>`
+          : html`<p className="mode-note is-quiet">この曲は、もとから押さえやすいコードばかりなので、置き換えるところはありません。</p>`
+        : null}
     </div>
     <p className="panel-lead">バーが長いほど押さえやすいカポ位置です。「自動」なら一番弾きやすい位置を選び続けます。</p>
     <button className=${cx('capo-row', auto && 'is-on')} onClick=${() => { setSt({ capo: null }); onClose(); }}>
@@ -773,14 +842,26 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner }) {
   </${Sheet}>`;
 }
 
-function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, flat, picks }) {
+function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, flat, picks, shown = {}, plainDisplay = null, easy = false }) {
   const [idx, setIdx] = useState(0);
   const name = tap ? (typeof tap === 'string' ? display.get(tap) : tap.display) : null;
   const snd = tap && typeof tap === 'string' ? sounding.get(tap) : null;
-  // 開いたときは「いつもの形」を選んでいればそれを最初に出す
+  // かんたんモードで置き換える前のコード名
+  const plain =
+    !easy || !plainDisplay || !tap
+      ? null
+      : typeof tap === 'string'
+        ? plainDisplay.get(tap)
+        : [...plainDisplay.entries()].find(([k]) => display.get(k) === name)?.[1] || null;
+  // 押さえ方の並び: 通常モードは教本の形を先頭に、かんたんモードは押さえやすい順
+  const orderOf = (n) => {
+    const a = guitarVoicings(n);
+    return easy ? a : [...a.filter((v) => v.standard), ...a.filter((v) => !v.standard)];
+  };
+  // 開いたときは、譜面に出している形(自分で選んだ形 → モードの形)を最初に出す
   useEffect(() => {
-    if (instrument === 'guitar' && name && picks?.[name]) {
-      const i = guitarVoicings(name).findIndex((v) => v.frets.join(',') === picks[name]);
+    if (instrument === 'guitar' && name && shown?.[name]) {
+      const i = orderOf(name).findIndex((v) => v.frets.join(',') === shown[name]);
       setIdx(i >= 0 ? i : 0);
     } else setIdx(0);
   }, [tap]);
@@ -789,7 +870,7 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
     const f = v.frets.join(',');
     if (cur[name] === f) {
       delete cur[name];
-      toast('いちばんやさしい形に戻しました');
+      toast(easy ? 'かんたんモードの形に戻しました' : '教本どおりの形に戻しました');
     } else {
       cur[name] = f;
       toast(`${pretty(name)} はいつもこの形で出します`);
@@ -800,24 +881,46 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
   if (name && name.startsWith('/') && instrument === 'guitar') {
     body = html`<p className="panel-lead center">いちばん低い音（ベース）だけを <b>${pretty(name.slice(1))}</b> に変える指示です。<br />ギターでは6弦・5弦のその音だけを鳴らすか、ひとつ前のコードのまま弾いてください。</p>`;
   } else if (name && instrument === 'guitar') {
-    const vs = guitarVoicings(name);
-    const v = vs[idx % Math.max(1, vs.length)];
+    const vs = orderOf(name);
+    const i = idx % Math.max(1, vs.length);
+    const v = vs[i];
+    const f = v ? v.frets.join(',') : '';
+    const isPick = !!v && picks?.[name] === f;
+    const isShown = !!v && shown?.[name] === f;
+    const stdIdx = vs.findIndex((x) => x.standard);
+    const what = !v
+      ? ''
+      : isPick
+        ? 'いつもの形（自分で選んだ形）'
+        : isShown && easy
+          ? 'かんたんモードで出している形'
+          : v.standard
+            ? '標準の形（教本どおり）'
+            : v === guitarVoicings(name)[0]
+              ? 'いちばんやさしい形'
+              : 'ほかの押さえ方';
     body = html`<div className="chord-detail">
+      ${plain && plain !== name
+        ? html`<p className="eased-note">元のコードは <b><${ChordText} name=${pretty(plain)} /></b>。かんたんモードで、響きの近い <b><${ChordText} name=${pretty(name)} /></b> に置き換えています。</p>`
+        : null}
       <div className="chord-detail-diagram"><${GuitarDiagram} voicing=${v} width=${250} /></div>
       ${vs.length > 1
         ? html`<div className="row-gap center voicing-nav">
-            <button className="btn" onClick=${() => setIdx((idx - 1 + vs.length) % vs.length)} aria-label="前の押さえ方"><${Icon} name="back" /></button>
+            <button className="btn" onClick=${() => setIdx((i - 1 + vs.length) % vs.length)} aria-label="前の押さえ方"><${Icon} name="back" /></button>
             <span className="voicing-count">
-              <b>${(idx % vs.length) + 1} / ${vs.length}</b>
-              <small>${v && picks?.[name] === v.frets.join(',') ? 'いつもの形' : idx % vs.length === 0 ? 'いちばんやさしい形' : 'ほかの押さえ方'}</small>
+              <b>${i + 1} / ${vs.length}</b>
+              <small>${what}</small>
             </span>
-            <button className="btn" onClick=${() => setIdx((idx + 1) % vs.length)} aria-label="次の押さえ方"><${Icon} name="back" className="rot-180" /></button>
+            <button className="btn" onClick=${() => setIdx((i + 1) % vs.length)} aria-label="次の押さえ方"><${Icon} name="back" className="rot-180" /></button>
           </div>
-          ${v && (picks?.[name] || idx % vs.length !== 0)
-            ? html`<div className="row-gap center">
-                <button className=${cx('btn btn-sm', picks?.[name] === v.frets.join(',') ? 'btn-ghost' : 'btn-primary')} onClick=${() => togglePick(v)}>
-                  ${picks?.[name] === v.frets.join(',') ? 'いつもの形をやめる（やさしい形に戻す）' : 'いつもこの形で出す'}
-                </button>
+          ${v && ((!v.standard && stdIdx >= 0) || isPick || !isShown)
+            ? html`<div className="row-gap center voicing-actions">
+                ${!v.standard && stdIdx >= 0 ? html`<button className="btn btn-sm" onClick=${() => setIdx(stdIdx)}>教本の形を見る</button>` : null}
+                ${isPick || !isShown
+                  ? html`<button className=${cx('btn btn-sm', isPick ? 'btn-ghost' : 'btn-primary')} onClick=${() => togglePick(v)}>
+                      ${isPick ? 'いつもの形をやめる' : 'いつもこの形で出す'}
+                    </button>`
+                  : null}
               </div>`
             : null}`
         : null}
@@ -855,7 +958,7 @@ function ChordPanel({ tap, onClose, display, sounding, instrument, noteStyle, fl
   }
   const title = name ? pretty(name) : '';
   return html`<${Sheet} open=${!!tap} onClose=${onClose} title=${title} heading=${name ? html`<span className="sheet-chord-title"><${ChordText} name=${title} /></span>` : null}>
-    ${instrument === 'guitar' && snd && snd !== name ? html`<p className="panel-note center">実際に鳴る音は <b>${pretty(snd)}</b></p>` : null}
+    ${instrument === 'guitar' && snd && snd !== (plain || name) ? html`<p className="panel-note center">実際に鳴る音は <b>${pretty(snd)}</b></p>` : null}
     ${body}
   </${Sheet}>`;
 }

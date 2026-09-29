@@ -2,11 +2,11 @@
 import { useEffect, useState } from 'react';
 
 const KEY = 'hk.prefs';
-const PREFS_VERSION = 2;
+const PREFS_VERSION = 3;
 
 export const DEFAULT_PREFS = {
   instrument: 'guitar', // guitar | piano
-  simple: true, // ギター: かんたんコード
+  easy: false, // ギター: かんたんモード(オフ = 教本どおりの押さえ方。はじめて開く曲に使う)
   inlineDiagrams: true, // ギター: 歌詞の上に押さえ方の図
   inlineStaff: true, // ピアノ: 歌詞の上に五線譜の図
   voicingPick: {}, // ギター: 「いつもこの形」で選んだ押さえ方(コード名 → フレット)
@@ -31,6 +31,8 @@ function load() {
     const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
     // v2: 「歌詞1行の長さ」の標準を 2小節 → 自動 に変えたので、古い保存値は捨てる
     if (!saved.v || saved.v < 2) delete saved.barsPerLine;
+    // v3: 「かんたんコード」(標準オン)を「かんたんモード」(標準オフ)に作り替えたので、古い値は捨てる
+    delete saved.simple;
     return { ...DEFAULT_PREFS, ...saved, v: PREFS_VERSION };
   } catch {
     return { ...DEFAULT_PREFS, v: PREFS_VERSION };
