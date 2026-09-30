@@ -3377,3 +3377,18 @@ body:has(.rec-dock) .toast-host {
   color: var(--good);
   font-size: 0.98rem;
 }
+
+/* 今弾くコード(クリックと同じ拍で切り替わる) */
+.chord.is-now .chord-name {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 6px;
+  padding: 0 0.22em;
+  margin: 0 -0.22em;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.chord.is-now .mini-diagram {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}

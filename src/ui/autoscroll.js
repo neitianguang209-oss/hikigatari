@@ -3,6 +3,7 @@
 // 途中で指やホイールで動かすと一時停止し、手を離したところから続きを刻む。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audioCtx, click as clickSound, holdPlayback, releasePlayback } from '../lib/sound.js';
+import { moraCount } from '../music/sheet.js';
 
 // 小節線の無い行の長さ(小節数)の見積もり。
 // ChordWiki の小節線つき譜面(10曲・333行)で、コード数と歌詞の音数から実際の小節数を当てはめた式。
@@ -64,6 +65,54 @@ export function unlockAudio() {
   audioCtx();
 }
 
+// 行の中の各コードが、行の頭から何拍目で鳴り始めるか(クリックとコードの目印をそろえるため)
+// ・小節線のある行: 小節ごとにまとめ、1小節の中に複数あれば等分(4拍子で2つなら 0・2拍目)
+// ・小節線のない行: 歌詞の長さ(音の数)の割合で置き、2拍きざみ(足りなければ1拍きざみ)にそろえる
+export function chordOnsets(line, beats, bpb) {
+  const segs = line.segs || [];
+  const idx = [];
+  segs.forEach((s, j) => s.c && idx.push(j));
+  const n = idx.length;
+  if (!n || !beats) return [];
+  if (n > beats) return idx.map((_, q) => (q * beats) / n);
+  if (line.bars) {
+    const groups = [];
+    idx.forEach((j, q) => {
+      if (q === 0 || segs[j].bar) groups.push([]);
+      groups[groups.length - 1].push(q);
+    });
+    const nb = Math.max(1, Math.round(beats / bpb));
+    const out = new Array(n);
+    groups.forEach((g, gi) => {
+      const bar = groups.length === nb ? gi : Math.floor((gi * nb) / groups.length);
+      g.forEach((q, m) => (out[q] = bar * bpb + Math.round((m * bpb) / g.length)));
+    });
+    return out;
+  }
+  const mora = segs.map((s) => moraCount(s.t || ''));
+  const total = mora.reduce((a, b) => a + b, 0);
+  const grid = beats >= n * 2 ? 2 : 1;
+  const out = [];
+  let acc = 0;
+  let prev = -Infinity;
+  segs.forEach((s, j) => {
+    if (s.c) {
+      const f = total ? acc / total : out.length / n;
+      let b = Math.round((f * beats) / grid) * grid;
+      if (b <= prev) b = prev + grid;
+      out.push(b);
+      prev = b;
+    }
+    acc += mora[j];
+  });
+  // 行の終わりをはみ出したぶんは、後ろから詰める
+  for (let q = n - 1; q >= 0; q--) {
+    const max = q === n - 1 ? beats - 1 : out[q + 1] - 1;
+    if (out[q] > max) out[q] = Math.max(0, max);
+  }
+  return out;
+}
+
 // clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
 // clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
 export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1 }) {
@@ -71,7 +120,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
   const [loop, setLoopState] = useState(null); // 区間リピート { from, to }(行の番号)
-  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, beatEl: null, beatShown: -1 }).current;
+  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, beatEl: null, beatShown: -1, sched: 0, chordQ: -1, chordEl: null }).current;
   const live = useRef({});
 
   const tl = useMemo(() => {
@@ -86,7 +135,13 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     }
     const timed = [];
     durs.forEach((d, i) => d > 0 && timed.push(i));
-    return { starts, durs, total: t, timed };
+    // 曲全体の「コードが鳴り始める拍」の一覧(拍の順) { b, i: 行, k: 行の中で何番目のコード }
+    const onsets = [];
+    lines.forEach((l, i) => {
+      if (!durs[i]) return;
+      chordOnsets(l, durs[i], beatsPerBar).forEach((b, k) => onsets.push({ b: starts[i] + b, i, k }));
+    });
+    return { starts, durs, total: t, timed, onsets };
   }, [lines, barsPerLine, beatsPerBar]);
   s.tl = tl; // requestAnimationFrame のループからも常に最新の時間軸を見る
 
@@ -154,6 +209,16 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     return total;
   };
 
+  // その拍を含む行の頭の拍(行の後ろ3割より先まで読み進めていたら、次の行の頭)
+  const lineStartAt = (b) => {
+    const { timed, starts, durs } = s.tl;
+    const k = timedIndexAt(b);
+    if (k < 0) return 0;
+    const i = timed[k];
+    if (b - starts[i] > durs[i] * 0.7 && k + 1 < timed.length) return starts[timed[k + 1]];
+    return starts[i];
+  };
+
   // 今の読み位置(画面の上から3割)にある拍。いちばん上にいるときは曲の頭
   const beatFromScroll = () => {
     const el = scrollRef.current;
@@ -184,6 +249,41 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const clearHighlight = () => {
     scrollRef.current?.querySelector('.is-current')?.classList.remove('is-current');
     s.cur = -1;
+    clearChord();
+  };
+
+  // 今弾くコードの目印。クリックと同じ拍の時計で切り替える(描き直しで消えたら付け直す)
+  const chordAt = (b) => {
+    const o = s.tl.onsets;
+    let lo = 0;
+    let hi = o.length - 1;
+    if (hi < 0 || o[0].b > b) return -1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (o[mid].b <= b) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  const chordHighlight = (b) => {
+    const q = chordAt(b + 0.02); // 画面の書きかえの遅れぶん、ほんの少しだけ先に
+    const el = s.chordEl;
+    if (q === s.chordQ && el && el.isConnected && el.classList.contains('is-now')) return;
+    el?.classList.remove('is-now');
+    s.chordQ = q;
+    s.chordEl = null;
+    if (q < 0) return;
+    const { i, k } = s.tl.onsets[q];
+    const node = scrollRef.current?.querySelector(`[data-i="${i}"]`)?.querySelectorAll('.chord')[k];
+    if (node) {
+      node.classList.add('is-now');
+      s.chordEl = node;
+    }
+  };
+  const clearChord = () => {
+    s.chordEl?.classList.remove('is-now');
+    s.chordEl = null;
+    s.chordQ = -1;
   };
 
   const frame = (ts) => {
@@ -202,6 +302,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       }
       if (!s.holding) setScroll(posAtBeat(eff) - anchor());
       highlight(eff);
+      chordHighlight(eff);
       if (ts - s.lastProg > 250) {
         s.lastProg = ts;
         const d = c.duration();
@@ -214,22 +315,20 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       s.raf = requestAnimationFrame(frame);
       return;
     }
-    // 経過時間どおりに進める。2秒以上あいた(アプリが裏に回っていた)ときだけ、その間は止まっていたとみなす
-    let dt = s.last ? (ts - s.last) / 1000 : 0;
-    if (dt > 2) dt = 0;
-    s.last = ts;
-    const { bpm: B, click: C, beatsPerBar: bpb, scrollRate } = live.current;
-    const counting = s.countEnd != null && s.beat < s.countEnd;
-    // 譜面は「曲の長さに合わせた速さ」で、カウントとクリックは本来のBPMで進める
-    if (!s.holding) {
-      s.beat += ((dt * B) / 60) * (counting ? 1 : scrollRate);
-      s.clickPhase += (dt * B) / 60;
-    }
-    let eff = s.beat;
+    // 拍は音の時計から計算する(クリック・拍の点・コードの切り替わり・スクロールが全部同じ時計)
+    const { beatsPerBar: bpb } = live.current;
+    reanchor();
+    wrapLoop();
+    // 画面は「音が実際に耳に届く時刻」に合わせる(スピーカー・イヤホンまでの遅れぶん、目印を遅らせる)
+    const ac = audioCtx();
+    const lat = s.holding ? 0 : Math.min(0.5, ac.outputLatency || ac.baseLatency || 0);
+    const b = beatNow() - lat * s.bps;
+    s.beat = b;
+    let eff = b;
     if (s.countEnd != null) {
-      if (s.beat < s.countEnd) {
+      if (b < s.countEnd) {
         eff = s.startBeat;
-        const n = Math.ceil(s.countEnd - s.beat);
+        const n = Math.max(1, Math.min(bpb, Math.ceil(s.countEnd - b - 1e-6)));
         if (n !== s.lastCount) {
           s.lastCount = n;
           setCountdown(n);
@@ -240,24 +339,10 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         setCountdown(0);
       }
     }
-    // 区間リピート: 最後の行を弾き終えたら最初の行へ戻る(はみ出した分は持ち越してテンポを崩さない)
-    if (s.loop && s.countEnd == null) {
-      const a = s.tl.starts[s.loop.from];
-      const b = s.tl.starts[s.loop.to] + s.tl.durs[s.loop.to];
-      if (eff >= b && b > a) {
-        s.beat = a + ((eff - b) % (b - a));
-        eff = s.beat;
-      }
-    }
-    // メトロノーム(カウント中は必ず鳴らす)。譜面の伸び縮みとは別に、本来のBPMで刻む
-    const whole = Math.floor(s.clickPhase + 1e-6);
-    if (whole !== s.lastInt) {
-      s.lastInt = whole;
-      if (!s.holding && (C || s.countEnd != null)) clickSound(((whole % bpb) + bpb) % bpb === 0, 0, live.current.clickVolume);
-      showBeat(((whole % bpb) + bpb) % bpb);
-    }
+    showBeat(((Math.floor(b + 1e-6) % bpb) + bpb) % bpb);
     if (!s.holding) setScroll(posAtBeat(eff) - anchor());
     highlight(eff);
+    if (s.countEnd == null) chordHighlight(eff);
     if (ts - s.lastProg > 250) {
       s.lastProg = ts;
       setProgress(s.tl.total ? Math.min(1, eff / s.tl.total) : 0);
@@ -267,6 +352,64 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       return;
     }
     s.raf = requestAnimationFrame(frame);
+  };
+
+  // ---- 拍の時計
+  // 拍 = anchorBeat + (音の時刻 - anchorTime) × 1秒あたりの拍数。基準は音の時計(audioCtx().currentTime)なので、
+  // 画面の書きかえが遅れても、クリックの鳴る瞬間とコードの切り替わりはずれない
+  const nowT = () => audioCtx().currentTime;
+  // その拍での速さ: カウント中とクリック音オンのときは BPM どおり、それ以外は曲の長さに合わせた速さ
+  const wantBps = (at) => {
+    const { bpm: B, click: C, scrollRate } = live.current;
+    const counting = s.countEnd != null && at < s.countEnd;
+    return (B / 60) * (counting || C ? 1 : scrollRate);
+  };
+  const beatNow = () => (s.holding ? s.frozenBeat : s.anchorBeat + (nowT() - s.anchorTime) * s.bps);
+  const setBeat = (b, lead = 0) => {
+    s.anchorBeat = b;
+    s.anchorTime = nowT() + lead;
+    s.bps = wantBps(b);
+  };
+  // 速さが変わったら(BPM・クリックのオンオフ・カウントの終わり)、今の拍を起点に付け直す
+  const reanchor = () => {
+    if (s.holding) return;
+    const b = beatNow();
+    const bps = wantBps(b);
+    if (Math.abs(bps - s.bps) > 1e-9) {
+      s.anchorBeat = b;
+      s.anchorTime = nowT();
+      s.bps = bps;
+    }
+  };
+  // 区間リピート: 最後の行を弾き終えたら最初の行へ(ずらすのは小節の整数倍なので、強拍の位置も崩れない)
+  const wrapLoop = () => {
+    if (!s.loop || s.holding) return;
+    const a = s.tl.starts[s.loop.from];
+    const e = s.tl.starts[s.loop.to] + s.tl.durs[s.loop.to];
+    if (e <= a) return;
+    const b = beatNow();
+    if ((s.countEnd != null && b < s.countEnd) || b < e) return;
+    const shift = (e - a) * Math.floor((b - a) / (e - a));
+    s.anchorBeat -= shift;
+    s.sched -= shift;
+  };
+  // クリックの予約係: 画面の書きかえとは別に 25ミリ秒ごとに動き、0.15秒先までの拍を、音の時計の正確な時刻に予約する
+  const tickClicks = () => {
+    if (!s.playingFlag || live.current.clock) return;
+    reanchor();
+    wrapLoop();
+    if (s.holding) return;
+    const { click: C, beatsPerBar: bpb, clickVolume } = live.current;
+    const now = nowT();
+    for (let guard = 0; guard < 16; guard++) {
+      const next = s.sched + 1;
+      const t = s.anchorTime + (next - s.anchorBeat) / s.bps;
+      if (t > now + 0.15) break;
+      s.sched = next;
+      if (t < now - 0.03) continue; // 間に合わなかった拍(アプリが裏にいた等)は鳴らさない
+      const counting = s.countEnd != null && next < s.countEnd;
+      if (C || counting) clickSound(((next % bpb) + bpb) % bpb === 0, t, clickVolume);
+    }
   };
 
   // 拍の目印(再生バーの点)。React を通さず直接切り替える
@@ -305,7 +448,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     }
     unlockAudio();
     measure();
-    let b = fromBeat != null ? fromBeat : beatFromScroll();
+    // いま読んでいる行の頭(= 小節の頭)から始める。拍の途中から始めると、クリックとコードの切り替わりがずれるため
+    let b = fromBeat != null ? fromBeat : lineStartAt(beatFromScroll());
     // 区間リピート中は、区間の外から始めたら区間の頭から
     if (s.loop) {
       const a = s.tl.starts[s.loop.from];
@@ -314,19 +458,17 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     }
     s.startBeat = b >= s.tl.total ? 0 : b;
     const { countIn: ci, beatsPerBar: bpb } = live.current;
-    if (ci) {
-      s.beat = s.startBeat - bpb;
-      s.countEnd = s.startBeat;
-    } else {
-      s.beat = s.startBeat;
-      s.countEnd = null;
-    }
-    s.clickPhase = ci ? -bpb : 0;
-    s.lastInt = Math.floor(s.clickPhase) - 1;
-    s.last = 0;
+    s.countEnd = ci ? s.startBeat : null;
     s.holding = false;
+    s.beat = ci ? s.startBeat - bpb : s.startBeat;
+    // 60ミリ秒あとを最初の拍(カウントの1拍目)にして、そこから音の時計で刻む
+    setBeat(s.beat, 0.06);
+    s.sched = s.beat - 1;
     s.playingFlag = true;
     setPlaying(true);
+    clearInterval(s.tick);
+    s.tick = setInterval(tickClicks, 25);
+    tickClicks();
     cancelAnimationFrame(s.raf);
     s.raf = requestAnimationFrame(frame);
   };
@@ -334,6 +476,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const stop = () => {
     live.current.clock?.pause();
     s.playingFlag = false;
+    clearInterval(s.tick);
     cancelAnimationFrame(s.raf);
     s.countEnd = null;
     setCountdown(0);
@@ -381,10 +524,13 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       return;
     }
     if (s.playingFlag) {
-      s.beat = b;
       s.countEnd = null;
       setCountdown(0);
       s.holding = false;
+      s.beat = b;
+      setBeat(b, 0.03);
+      s.sched = b - 1;
+      tickClicks();
     } else {
       const el = scrollRef.current;
       if (el) el.scrollTo({ top: Math.max(0, (s.tops[i] ?? 0) - anchor()), behavior: 'smooth' });
@@ -393,7 +539,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const step = (dir) => {
     measure();
-    const cur = live.current.clock && s.playingFlag ? clockBeat() : s.playingFlag ? Math.max(s.beat, s.startBeat) : beatFromScroll();
+    const cur = live.current.clock && s.playingFlag ? clockBeat() : s.playingFlag ? Math.max(beatNow(), s.startBeat) : beatFromScroll();
     const k = timedIndexAt(cur);
     const nk = Math.max(0, Math.min(s.tl.timed.length - 1, k + dir));
     const i = s.tl.timed[nk];
@@ -407,6 +553,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     const onScroll = () => {
       if (!s.playingFlag) return;
       if (s.expect != null && Math.abs(el.scrollTop - s.expect) <= 3) return;
+      // 指で動かしている間は、拍の時計を止めておく
+      if (!s.holding && !live.current.clock) s.frozenBeat = beatNow();
       s.holding = true;
       clearTimeout(s.idle);
       s.idle = setTimeout(() => {
@@ -418,13 +566,16 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
           s.holding = false;
           return;
         }
-        s.beat = beatFromScroll();
+        // 手を離したところの行の頭から、拍をそろえて続ける
         if (s.countEnd != null) {
           s.countEnd = null;
           setCountdown(0);
         }
-        s.expect = el.scrollTop;
         s.holding = false;
+        s.beat = lineStartAt(beatFromScroll());
+        setBeat(s.beat, 0.05);
+        s.sched = s.beat - 1;
+        s.expect = el.scrollTop;
       }, 450);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -458,6 +609,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   useEffect(() => () => {
     s.playingFlag = false;
+    clearInterval(s.tick);
     cancelAnimationFrame(s.raf);
     if (s.held) releasePlayback();
   }, []);

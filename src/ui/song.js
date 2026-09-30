@@ -736,6 +736,7 @@ function SongReady({ song, reload }) {
       beatsPerBar=${beatsPerBar}
       clickVolume=${prefs.clickVolume ?? 1}
       setClickVolume=${(v) => setPrefs({ clickVolume: v })}
+      clickOn=${!!(st.click ?? prefs.click)}
     />
     <${TextPanel} open=${panel === 'text'} onClose=${() => setPanel(null)} fontScale=${fontScale} setSt=${setSt} />
     <${MorePanel}
@@ -1216,7 +1217,7 @@ function Metronome({ bpm, beatsPerBar = 4, volume, setVolume }) {
   </div>`;
 }
 
-function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, clickVolume = 1, setClickVolume }) {
+function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, clickVolume = 1, setClickVolume, clickOn = false }) {
   const taps = useRef([]);
   const tap = () => {
     const now = performance.now();
@@ -1250,9 +1251,11 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
             ? ''
             : !fit.usable
               ? '譜面と曲の長さが離れすぎているので、BPMどおりに進みます'
-              : fitSong
-                ? `譜面がちょうど曲の長さで終わるよう、${fit.ratio > 1 ? 'ゆっくり' : '速め'}に進めています（×${(1 / fit.ratio).toFixed(2)}）。クリック音は元のBPMのまま`
-                : 'オフ: BPMと小節の数どおりに進みます'}
+              : !fitSong
+                ? 'オフ: BPMと小節の数どおりに進みます'
+                : clickOn
+                  ? 'クリック音がオンの間は、クリックとコードの切り替わりがぴったり合うよう、BPMどおりに進みます（オフにすると曲の長さに合わせます）'
+                  : `譜面がちょうど曲の長さで終わるよう、${fit.ratio > 1 ? 'ゆっくり' : '速め'}に進めています（×${(1 / fit.ratio).toFixed(2)}）。クリック音をオンにすると、BPMどおりに戻ります`}
         checked=${fitSong && !!fit?.usable}
         onChange=${(v) => setSt({ fitSong: v })}
       />
