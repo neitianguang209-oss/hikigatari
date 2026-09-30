@@ -8,7 +8,7 @@ import { api, lookupAppleMusic } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
 import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed } from '../lib/util.js';
-import { TunerSheet } from './tuner.js';
+import { TunerSheet, prepareTuner } from './tuner.js';
 import { checkWatched } from '../lib/watch.js';
 
 const earLink = (g) =>
@@ -172,7 +172,7 @@ export function Home() {
     <header className="home-top">
       <div className="brand"><${Logo} size=${30} /><span>ひきがたり</span></div>
       <div className="home-top-actions">
-        <button className="icon-btn" onClick=${() => setTuner(true)} aria-label="チューナー" title="チューナー"><${Icon} name="tuner" /></button>
+        <button className="icon-btn" onClick=${() => { prepareTuner(); setTuner(true); }} aria-label="チューナー" title="チューナー"><${Icon} name="tuner" /></button>
         <button className="icon-btn" onClick=${() => go('/settings')} aria-label="設定" title="設定"><${Icon} name="settings" /></button>
       </div>
     </header>

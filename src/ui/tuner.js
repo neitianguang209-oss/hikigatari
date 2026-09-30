@@ -5,7 +5,7 @@ import htm from 'htm';
 import { Icon } from './icons.js';
 import { Sheet } from './common.js';
 import { cx, signed } from '../lib/util.js';
-import { chime, holdPlayback, releasePlayback } from '../lib/sound.js';
+import { chime, holdPlayback, releasePlayback, audioCtx } from '../lib/sound.js';
 const html = htm.bind(React.createElement);
 
 // 6弦 → 1弦(標準チューニング)
@@ -75,11 +75,9 @@ export function detectPitch(buf, sr) {
 }
 
 // 見本の音(はじいた弦に近い、すぐ減衰する音)
-let toneCtx = null;
 function playTone(midi) {
   try {
-    toneCtx = toneCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (toneCtx.state === 'suspended') toneCtx.resume();
+    const toneCtx = audioCtx();
     const t = toneCtx.currentTime + 0.01;
     const f = freqOf(midi);
     const out = toneCtx.createGain();
@@ -104,6 +102,11 @@ function playTone(midi) {
   } catch {}
 }
 
+// 開いた瞬間(タップの中)に音の部品を動かしておくと、iPhone でも開いてすぐ聞き始められる
+export function prepareTuner() {
+  audioCtx();
+}
+
 export function TunerSheet({ open, onClose }) {
   return html`<${Sheet} open=${open} onClose=${onClose} title="チューナー（ギターの音合わせ）">
     <${Tuner} />
@@ -113,9 +116,6 @@ export function TunerSheet({ open, onClose }) {
 function Tuner() {
   const [status, setStatus] = useState('idle'); // idle | starting | on | denied | error
   const [reading, setReading] = useState(null); // { midi, cents, freq, string }
-  const [target, setTarget] = useState(null); // null=自動 / 弦の番号
-  const targetRef = useRef(null);
-  targetRef.current = target;
   const rt = useRef(null);
   // 合わせ終わった弦(ぴったりが0.6秒続いたら「ピコン」)と、弦ごとの最後のずれ(セント)
   const [done, setDone] = useState(() => new Set());
@@ -135,7 +135,9 @@ function Tuner() {
     if (!r) return;
     clearInterval(r.timer);
     r.stream?.getTracks().forEach((t) => t.stop());
-    r.ctx?.close?.().catch?.(() => {});
+    try {
+      r.src?.disconnect();
+    } catch {}
   };
   const alive = useRef(true);
   useEffect(
@@ -148,18 +150,22 @@ function Tuner() {
 
   const start = async () => {
     setStatus('starting');
-    // iPhone は「押した瞬間」に作った音の部品しか動かないので、マイクの許可を待つ前に作っておく
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    ctx.resume?.().catch?.(() => {});
+    // 音の部品はアプリで1つを使い回す(開くときのタップで動かしてある)
+    const ctx = audioCtx();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
       // 許可を待つあいだに閉じられていたら、マイクをすぐ止める
       if (!alive.current) {
         stream.getTracks().forEach((t) => t.stop());
-        ctx.close?.().catch?.(() => {});
         return;
       }
       if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+      // それでも動かないとき(開いてからしばらくたった等)は、ボタンを押してもらう
+      if (ctx.state !== 'running') {
+        stream.getTracks().forEach((t) => t.stop());
+        setStatus('idle');
+        return;
+      }
       const src = ctx.createMediaStreamSource(stream);
       const an = ctx.createAnalyser();
       an.fftSize = 4096;
@@ -169,6 +175,7 @@ function Tuner() {
       const sr = ctx.sampleRate / 2; // 半分に間引いて計算を軽くする(ギターの音域には十分)
       const hist = [];
       let lastHeard = 0;
+      let cur = null; // いま合わせている弦 { n, mm }(ペグを回して音がなめらかに動く間は同じ弦とみなす)
       let quietUntil = 0; // 「ピコン」の音をマイクで拾わないよう、鳴らした直後は測らない
       const timer = setInterval(() => {
         if (performance.now() < quietUntil) return;
@@ -179,6 +186,7 @@ function Tuner() {
         if (!p || p.freq < 60 || p.freq > 1100) {
           if (now - lastHeard > 1600) {
             hist.length = 0;
+            cur = null;
             setReading(null);
           }
           return;
@@ -191,13 +199,19 @@ function Tuner() {
         lastHeard = now;
         const sorted = [...hist].sort((a, b) => a - b);
         let mm = sorted[sorted.length >> 1];
-        const locked = targetRef.current != null ? STRINGS.find((s) => s.n === targetRef.current) : null;
-        // 弦を決めているときは、1オクターブずれて聞こえた分は折り返す(倍音を拾ったとき)
-        if (locked && Math.abs(Math.abs(mm - locked.midi) - 12) < 1.5) mm -= Math.sign(mm - locked.midi) * 12;
-        const near = locked || STRINGS.reduce((a, b) => (Math.abs(b.midi - mm) < Math.abs(a.midi - mm) ? b : a));
-        const offString = !locked && Math.abs(near.midi - mm) > 2.5;
-        const ref = offString ? Math.round(mm) : near.midi;
-        const rd = { midi: ref, cents: Math.round((mm - ref) * 100), freq: p.freq, string: offString ? null : near.n };
+        // どの弦かを自動で決める: 合わせている途中の弦は、音がなめらかにつながる限りその弦のまま
+        // (大きくずれた弦を巻き上げていく途中で、となりの弦と取り違えないように)
+        let str = null;
+        if (cur) {
+          const t = STRINGS.find((s) => s.n === cur.n);
+          // 低い弦の倍音(1オクターブ上)を拾ったときは折り返す
+          if (Math.abs(Math.abs(mm - t.midi) - 12) < 1.2) mm -= Math.sign(mm - t.midi) * 12;
+          if (Math.abs(mm - cur.mm) < 1 && Math.abs(mm - t.midi) < 5) str = t;
+        }
+        if (!str) str = STRINGS.reduce((a, b) => (Math.abs(b.midi - mm) < Math.abs(a.midi - mm) ? b : a));
+        cur = { n: str.n, mm };
+        const ref = str.midi;
+        const rd = { midi: ref, cents: Math.round((mm - ref) * 100), freq: p.freq, string: str.n };
         setReading(rd);
         if (rd.string) {
           setLast((x) => (x[rd.string] === rd.cents ? x : { ...x, [rd.string]: rd.cents }));
@@ -229,13 +243,16 @@ function Tuner() {
           }
         }
       }, 50);
-      rt.current = { stream, ctx, timer };
+      rt.current = { stream, ctx, timer, src };
       setStatus('on');
     } catch (e) {
-      ctx.close?.().catch?.(() => {});
       setStatus(e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'denied' : 'error');
     }
   };
+  // 開いたらすぐ聞き始める(弦を選ぶ必要はない)
+  useEffect(() => {
+    start();
+  }, []);
 
   const pickString = (s) => {
     // マイクを使っていないときは、マナーモードでも見本の音が聞こえるようにする
@@ -243,7 +260,6 @@ function Tuner() {
     if (!listening) holdPlayback();
     playTone(s.midi);
     if (!listening) setTimeout(releasePlayback, 2800);
-    setTarget(s.n);
   };
 
   const cents = reading ? reading.cents : 0;
@@ -291,9 +307,11 @@ function Tuner() {
     </div>
     <p className=${cx('tuner-guide', ok && 'is-ok')} aria-live="polite">${guide || ' '}</p>
 
-    ${status !== 'on'
+    ${status === 'starting'
+      ? html`<p className="tuner-start muted small">マイクの準備をしています…（はじめてのときは、マイクの許可を聞かれます）</p>`
+      : status !== 'on'
       ? html`<div className="tuner-start">
-          <button className="btn btn-primary" onClick=${start} disabled=${status === 'starting'}><${Icon} name="mic" size=${18} /> マイクで音を聞く</button>
+          <button className="btn btn-primary" onClick=${start}><${Icon} name="mic" size=${18} /> タップして聞き始める</button>
           <p className="muted small">
             ${status === 'denied'
               ? 'マイクが許可されていません。iPhone は 設定 → Safari → マイク（ホーム画面から開いた場合はアプリの設定）で許可してください。下の弦ボタンで見本の音を鳴らして、耳で合わせることもできます。'
@@ -308,7 +326,7 @@ function Tuner() {
       ${STRINGS.map(
         (s) => html`<button
           key=${s.n}
-          className=${cx('tuner-string', target === s.n && 'is-target', reading && reading.string === s.n && 'is-hit', done.has(s.n) && 'is-done', reading && reading.string === s.n && ok && 'is-ok')}
+          className=${cx('tuner-string', reading && reading.string === s.n && 'is-hit', done.has(s.n) && 'is-done', reading && reading.string === s.n && ok && 'is-ok')}
           onClick=${() => pickString(s)}
           aria-label=${`${s.n}弦 ${s.name} の見本の音${done.has(s.n) ? '（合わせ済み）' : ''}`}
         >
@@ -324,8 +342,7 @@ function Tuner() {
         </div>`
       : null}
     <div className="tuner-foot">
-      <span className="muted small">${target ? `${target}弦に合わせています` : '鳴らした弦を自動で見分けます'}（弦をタップすると見本の音）</span>
-      ${target ? html`<button className="btn btn-sm btn-ghost" onClick=${() => setTarget(null)}>自動にもどす</button>` : null}
+      <span className="muted small">弦を1本ずつ鳴らすだけで、どの弦か自動で見分けます。ボタンを押すと、その弦の見本の音が鳴ります。</span>
     </div>
   </div>`;
 }

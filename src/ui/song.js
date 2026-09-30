@@ -5,7 +5,7 @@ import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
 import { useAutoScroll } from './autoscroll.js';
-import { TunerSheet } from './tuner.js';
+import { TunerSheet, prepareTuner } from './tuner.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
@@ -744,7 +744,7 @@ function SongReady({ song, reload }) {
       song=${song}
       reload=${reload}
       onText=${() => setPanel('text')}
-      onTuner=${() => setPanel('tuner')}
+      onTuner=${() => { prepareTuner(); setPanel('tuner'); }}
       rec=${rec}
       recOn=${recOn}
       onPickRec=${() => { setPanel(null); recFileRef.current?.click(); }}
