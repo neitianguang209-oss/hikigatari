@@ -120,3 +120,8 @@ export function downloadFile(name, text, type = 'application/json') {
 export function signed(n) {
   return n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : '0';
 }
+
+// iTunes の曲データ → Apple Music の曲のページ(album/…?i=曲 の形。Music アプリがいちばん確実に開ける)
+export function appleUrlOf(x) {
+  return ((x && x.trackViewUrl) || '').replace(/[?&]uo=\d+/, '').replace(/\?$/, '');
+}

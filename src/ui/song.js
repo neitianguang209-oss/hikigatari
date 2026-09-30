@@ -16,7 +16,7 @@ import { lib, useSong, media } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, sourceName, norm, baseTitle, sameArtist, signed } from '../lib/util.js';
+import { cx, sourceName, norm, baseTitle, sameArtist, signed, appleUrlOf } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- 入口: 譜面の読み込み
@@ -75,7 +75,7 @@ export function SongPage({ id }) {
 
   if (!song.sheet)
     return html`<div className="song">
-      <${TopBar} song=${song} />
+      <${TopBar} song=${song} onApple=${() => openAppleMusic(song)} />
       <div className="page-center">
         ${state.error
           ? html`<div className="load-error">
@@ -97,7 +97,7 @@ export function SongPage({ id }) {
 
 // ---------------------------------------------------------------- 上のバー
 
-function TopBar({ song, onMore }) {
+function TopBar({ song, onMore, onApple }) {
   const toggleFav = () => {
     const on = !song.fav;
     lib.patch(song.id, { fav: on, favAt: on ? Date.now() : song.favAt });
@@ -109,6 +109,11 @@ function TopBar({ song, onMore }) {
       <div className="t">${song.title || '無題'}</div>
       <div className="a">${song.artist || ''}</div>
     </div>
+    ${onApple
+      ? html`<button className="icon-btn apple-btn" onClick=${onApple} aria-label="Apple Music で原曲を聴く" title="Apple Music で原曲を聴く">
+          <${Icon} name="music" size=${17} /><span>原曲</span>
+        </button>`
+      : null}
     <button className=${cx('icon-btn fav-btn', song.fav && 'is-on')} onClick=${toggleFav} aria-label=${song.fav ? 'お気に入りから外す' : 'お気に入りに入れる'} aria-pressed=${!!song.fav}>
       <${StarIcon} on=${song.fav} />
     </button>
@@ -349,6 +354,11 @@ function SongReady({ song, reload }) {
     : null;
 
   const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click, durationMs: song.durationMs, fitSong, clock, clickVolume: prefs.clickVolume ?? 1 });
+  // 原曲を流しに Apple Music へ。流れている譜面は止めておく(戻ってきたら ▶ で続きから)
+  const onApple = () => {
+    if (scroll.playing) scroll.stop();
+    openAppleMusic(song);
+  };
 
   // 録音を選んだら、この端末に保存して(大きすぎるときは今回だけ)、録音に合わせるモードにする
   const attachRec = async (file) => {
@@ -423,24 +433,40 @@ function SongReady({ song, reload }) {
     };
   }, [rec?.url, recOn, scroll.playing]);
 
-  // 曲の長さ(自動スクロールを曲に合わせるのに使う)が分からない曲は、Apple の曲データから一度だけ探す
+  // 曲の長さ(自動スクロールを曲に合わせるのに使う)と Apple Music の曲のページが分からない曲は、Apple の曲データから一度だけ探す
   useEffect(() => {
-    if (song.durationMs || song.durationTried || !song.title) return;
+    const needLen = !song.durationMs && !song.durationTried;
+    const needUrl = !song.appleUrl && !song.appleTried;
+    if ((!needLen && !needUrl) || !song.title) return;
     let alive = true;
     (async () => {
       try {
-        const q = `${baseTitle(song.title)} ${song.artist || ''}`.trim();
-        const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=jp&entity=song&limit=10&lang=ja_jp`);
-        const j = await r.json();
-        const hit = (j.results || []).find(
-          (x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist)),
-        );
+        let hit = null;
+        if (song.appleId) {
+          const j = await (await fetch(`https://itunes.apple.com/lookup?id=${song.appleId}&country=jp&lang=ja_jp`)).json();
+          hit = j.results?.[0] || null;
+        }
+        if (!hit) {
+          const q = `${baseTitle(song.title)} ${song.artist || ''}`.trim();
+          const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=jp&entity=song&limit=10&lang=ja_jp`);
+          const j = await r.json();
+          hit = (j.results || []).find(
+            (x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist)),
+          );
+        }
         if (!alive) return;
         await lib.patch(
           song.id,
           hit
-            ? { durationMs: hit.trackTimeMillis, appleId: song.appleId || hit.trackId, artwork: song.artwork || hit.artworkUrl100, durationTried: true }
-            : { durationTried: true },
+            ? {
+                durationMs: song.durationMs || hit.trackTimeMillis,
+                appleId: song.appleId || hit.trackId,
+                appleUrl: song.appleUrl || appleUrlOf(hit) || null,
+                artwork: song.artwork || hit.artworkUrl100,
+                durationTried: true,
+                appleTried: true,
+              }
+            : { durationTried: true, appleTried: true },
         );
       } catch {}
     })();
@@ -584,7 +610,7 @@ function SongReady({ song, reload }) {
   const flatForShape = keyPrefersFlat(shapeKey);
 
   return html`<div className=${cx('song', 'is-' + instrument, inline && 'has-inline')}>
-    <${TopBar} song=${song} onMore=${() => setPanel('more')} />
+    <${TopBar} song=${song} onMore=${() => setPanel('more')} onApple=${onApple} />
     <div className="song-controls" role="toolbar" aria-label="表示の設定">
       <${Segmented}
         label="楽器"
@@ -746,6 +772,7 @@ function SongReady({ song, reload }) {
       reload=${reload}
       onText=${() => setPanel('text')}
       onTuner=${() => { prepareTuner(); setPanel('tuner'); }}
+      onApple=${onApple}
       rec=${rec}
       recOn=${recOn}
       onPickRec=${() => { setPanel(null); recFileRef.current?.click(); }}
@@ -1287,11 +1314,37 @@ function TextPanel({ open, onClose, fontScale, setSt }) {
 
 // 原曲を Apple Music で開く(曲が特定できていればその曲、分からなければ検索)
 function appleMusicUrl(song) {
+  if (song.appleUrl) return song.appleUrl;
   if (song.appleId) return `https://music.apple.com/jp/song/${song.appleId}`;
   return `https://music.apple.com/jp/search?term=${encodeURIComponent(`${baseTitle(song.title)} ${song.artist || ''}`.trim())}`;
 }
 
-function MorePanel({ open, onClose, song, reload, onText, onTuner, rec = null, recOn = false, onPickRec, onRecOn, onRecPanel }) {
+const IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+
+// iPhone・iPad は music:// で Music アプリを直接開く(ホーム画面のアプリから https で開くと、アプリ内のブラウザに Web 版が出てしまうため)。
+// 開かなかったとき(アプリを消しているなど)だけ Web 版への道を出す
+function openAppleMusic(song) {
+  const web = appleMusicUrl(song);
+  const known = !!(song.appleUrl || song.appleId);
+  if (!IOS || !known) {
+    window.open(web, '_blank', 'noopener');
+    return;
+  }
+  let left = false;
+  const onHide = () => {
+    if (document.visibilityState === 'hidden') left = true;
+  };
+  document.addEventListener('visibilitychange', onHide);
+  location.href = web.replace(/^https:/, 'music:');
+  setTimeout(() => {
+    document.removeEventListener('visibilitychange', onHide);
+    if (!left && document.visibilityState === 'visible') {
+      toast('Apple Music が開かなかったときは', { action: { label: 'Web で開く', onClick: () => window.open(web, '_blank', 'noopener') } });
+    }
+  }, 1500);
+}
+
+function MorePanel({ open, onClose, song, reload, onText, onTuner, onApple, rec = null, recOn = false, onPickRec, onRecOn, onRecPanel }) {
   const others = (song.sources || []).filter((s) => !(s.source === song.source && s.id === song.sourceId));
   const switchTo = async (s) => {
     if ((song.edited || song.source === 'ear') && !confirm(song.source === 'ear' ? '耳コピの下書きは消えます。切り替えますか？' : '編集した譜面は消えます。切り替えますか？')) return;
@@ -1323,7 +1376,7 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner, rec = null, r
           : html`<button className="menu-item is-accent" onClick=${onRecOn}><${Icon} name="mic" /><span className="menu-item-text">録音に合わせる<small>${rec.name}</small></span></button>`}
     </div>
     <div className="menu-group">
-      <a className="menu-item" href=${appleMusicUrl(song)} target="_blank" rel="noopener" onClick=${onClose}><${Icon} name="headphones" /><span className="menu-item-text">Apple Music で原曲を聴く</span></a>
+      <button className="menu-item" onClick=${() => { onClose(); onApple(); }}><${Icon} name="headphones" /><span className="menu-item-text">Apple Music で原曲を聴く<small>上のバーの「原曲」ボタンからも開けます</small></span></button>
       <button className="menu-item" onClick=${onTuner}><${Icon} name="tuner" /><span className="menu-item-text">チューナー（ギターの音合わせ）</span></button>
     </div>
     <div className="menu-group">

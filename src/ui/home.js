@@ -7,7 +7,7 @@ import { lib, useLibrary, useSyncState } from '../lib/store.js';
 import { api, lookupAppleMusic } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed } from '../lib/util.js';
+import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed, artworkUrl, tileColor } from '../lib/util.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
 import { checkWatched } from '../lib/watch.js';
 
@@ -47,6 +47,7 @@ export async function openGroup(g, { replace = false } = {}) {
       sources: g.sources,
       artwork: cur.artwork || g.artwork || null,
       appleId: cur.appleId || g.appleId || null,
+      appleUrl: cur.appleUrl || g.appleUrl || null,
       durationMs: cur.durationMs || g.durationMs || null,
       ...(cur.sheet ? {} : { source: cur.source || first.source, sourceId: cur.sourceId || first.id, sourceUrl: cur.sourceUrl || first.url, sourceLabel: cur.sourceLabel ?? first.label }),
     });
@@ -57,6 +58,7 @@ export async function openGroup(g, { replace = false } = {}) {
       artist: g.artist || '',
       artwork: g.artwork || null,
       appleId: g.appleId || null,
+      appleUrl: g.appleUrl || null,
       durationMs: g.durationMs || null,
       source: first.source,
       sourceId: first.id,
@@ -285,8 +287,9 @@ export function Search({ q }) {
     api('search', { q })
       .then((r) => {
         if (!alive) return;
-        searchCache.set(q, { groups: r.groups || [], understood: r.understood || null });
-        setState({ loading: false, error: null, groups: r.groups || [], understood: r.understood || null });
+        const res = { groups: r.groups || [], artists: r.artists || [], understood: r.understood || null };
+        searchCache.set(q, res);
+        setState({ loading: false, error: null, ...res });
       })
       .catch((e) => alive && setState({ loading: false, error: e.message, groups: [] }));
     return () => {
@@ -314,6 +317,12 @@ export function Search({ q }) {
       <button className="icon-btn" onClick=${() => back('/')} aria-label="戻る"><${Icon} name="back" /></button>
       <${SearchBox} initial=${q} onSubmit=${(v) => go('/search?q=' + encodeURIComponent(v), { replace: true })} />
     </header>
+
+    ${!state.loading && state.artists?.length
+      ? html`<section className="artist-hits" aria-label="アーティスト">
+          ${state.artists.map((a) => html`<${ArtistHit} key=${a.unId} a=${a} />`)}
+        </section>`
+      : null}
 
     ${local.length
       ? html`<section className="home-section">
@@ -364,6 +373,23 @@ export function Search({ q }) {
         : null}
     </section>
   </div>`;
+}
+
+// アーティストの候補(押すとその人の曲一覧へ)
+function ArtistHit({ a }) {
+  const [broken, setBroken] = useState(false);
+  return html`<button className="artist-hit" onClick=${() => go(`/artist?name=${encodeURIComponent(a.name)}&un=${a.unId}`)}>
+    <span className="artist-hit-art" style=${a.artwork && !broken ? null : { background: tileColor(a.name) }}>
+      ${a.artwork && !broken
+        ? html`<img src=${artworkUrl(a.artwork, 120)} alt="" width="48" height="48" loading="lazy" onError=${() => setBroken(true)} />`
+        : a.name.trim().slice(0, 1)}
+    </span>
+    <span className="artist-hit-text">
+      <span className="artist-hit-name">${a.name}</span>
+      <span className="artist-hit-sub">アーティスト ・ ${a.count}曲</span>
+    </span>
+    <span className="artist-hit-go">曲一覧<${Icon} name="chevron" size=${16} /></span>
+  </button>`;
 }
 
 function ResultRow({ g }) {

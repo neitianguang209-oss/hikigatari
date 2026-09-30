@@ -8,6 +8,7 @@ import { deviceKey, onUnpaired } from './lib/api.js';
 import { applyTheme } from './lib/prefs.js';
 import { Home, Search, OpenFrom } from './ui/home.js';
 import { SongPage } from './ui/song.js';
+import { ArtistPage } from './ui/artist.js';
 import { Editor } from './ui/editor.js';
 import { Settings } from './ui/settings.js';
 import { AppleGuide } from './ui/apple.js';
@@ -68,6 +69,7 @@ function App() {
   let m;
   if (path === '/' || path === '') page = html`<${Home} />`;
   else if (path === '/search') page = html`<${Search} q=${params.q || ''} />`;
+  else if (path === '/artist') page = html`<${ArtistPage} key=${params.name || ''} params=${params} />`;
   else if ((m = path.match(/^\/song\/(.+)$/))) page = html`<${SongPage} id=${decodeURIComponent(m[1])} />`;
   else if (path === '/add') page = html`<${Editor} params=${params} />`;
   else if ((m = path.match(/^\/edit\/(.+)$/))) page = html`<${Editor} key=${m[1]} id=${decodeURIComponent(m[1])} />`;

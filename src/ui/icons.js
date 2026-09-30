@@ -5,6 +5,7 @@ const html = htm.bind(React.createElement);
 
 const P = {
   back: 'M15 18l-6-6 6-6',
+  chevron: 'M9 18l6-6-6-6',
   close: 'M18 6L6 18M6 6l12 12',
   search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35',
   settings:

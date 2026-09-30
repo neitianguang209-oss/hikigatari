@@ -3392,3 +3392,149 @@ body:has(.rec-dock) .toast-host {
   outline-offset: 1px;
   border-radius: 4px;
 }
+
+/* ---------------------------------------------------------------- アーティスト(検索の候補・曲一覧) */
+
+.artist-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.artist-hit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.artist-hit:active {
+  background: var(--surface-2);
+}
+.artist-hit-art {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 1.2rem;
+}
+.artist-hit-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.artist-hit-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.artist-hit-name {
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artist-hit-sub {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.artist-hit-go {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+.artist-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.artist-count {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.artist-songs .song-row-main {
+  padding-right: 10px;
+}
+.artist-songs .song-row-main:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.artist-songs .song-row-text {
+  flex: 1;
+}
+.artist-songs .song-row-title .icon {
+  color: #f2b01e;
+  vertical-align: -1px;
+}
+.artist-songs .song-row-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 1.2em;
+}
+.saved-tag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+.row-chevron {
+  flex: none;
+  color: var(--muted);
+}
+.spinner.spinner-sm {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+}
+.artist-foot {
+  margin-top: 12px;
+}
+
+/* 曲の画面: Apple Music で原曲を聴くボタン(上のバー) */
+.icon-btn.apple-btn {
+  width: auto;
+  height: 34px;
+  gap: 3px;
+  padding: 0 10px 0 8px;
+  margin-right: 2px;
+  background: var(--surface-2);
+  color: #e0203f;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.icon-btn.apple-btn:active {
+  background: var(--surface-3);
+}
+:root[data-theme='dark'] .icon-btn.apple-btn {
+  color: #ff6b81;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .icon-btn.apple-btn {
+    color: #ff6b81;
+  }
+}

@@ -117,7 +117,11 @@ async function get(url: string, { mobile = false, timeout = 9000 } = {}) {
 type Hit = { source: string; id: string; title: string; artist: string; badges?: string[]; url: string; crown?: number };
 
 async function ufretSearch(q: string): Promise<Hit[]> {
-  const html = await get('https://www.ufret.jp/search.php?key=' + encodeURIComponent(q), { mobile: true });
+  return ufretList(await get('https://www.ufret.jp/search.php?key=' + encodeURIComponent(q), { mobile: true }));
+}
+
+// 検索結果・アーティストのページに共通の曲の並び(c-list)
+function ufretList(html: string): Hit[] {
   const out: Hit[] = [];
   const seen = new Set<string>();
   const re = /<a href="\/song\.php\?data=(\d+)" class="c-list__link">([\s\S]*?)<\/a>/g;
@@ -142,6 +146,22 @@ async function ufretSearch(q: string): Promise<Hit[]> {
     });
   }
   return out;
+}
+
+// アーティストの譜面の一覧(U-FRET のアーティストページは新着順)。名前の書き方が違って空なら、検索の「関連するアーティスト」から正しい名前を探す
+async function ufretArtistSongs(name: string): Promise<Hit[]> {
+  const page = (n: string) =>
+    get('https://www.ufret.jp/artist.php?data=' + encodeURIComponent(n).replace(/%20/g, '+'), { mobile: true, timeout: 12000 });
+  const first = ufretList(await page(name));
+  if (first.length) return first;
+  const html = await get('https://www.ufret.jp/search.php?key=' + encodeURIComponent(name), { mobile: true });
+  const re = /<a href="\/artist\.php\?data=([^"]+)">[\s\S]*?c-card-artist__artist">([\s\S]*?)<\/p>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const n = stripTags(m[2]).trim();
+    if (fold(n) === fold(name) || sameArtist(n, name)) return ufretList(await page(n));
+  }
+  return [];
 }
 
 async function ufretSheet(id: string) {
@@ -221,6 +241,38 @@ async function utanetList(title: string, bselect: number): Promise<Hit[]> {
   return out;
 }
 
+// アーティスト名で探す(「あいみょん 101曲」のように、歌詞の登録数つきで返る)
+type ArtistHit = { name: string; unId: string; count: number };
+async function utanetArtists(q: string): Promise<ArtistHit[]> {
+  const html = await get(`https://www.uta-net.com/search/?Keyword=${encodeURIComponent(q)}&Aselect=1&Bselect=3`, { timeout: 6000 });
+  const out: ArtistHit[] = [];
+  const re = /href="\/artist\/(\d+)\/"><span class="fw-bold">([\s\S]*?)<\/span><br><span class="song-count">歌詞：(\d+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) out.push({ unId: m[1], name: stripTags(m[2]).trim(), count: Number(m[3]) });
+  return out;
+}
+
+// アーティストの曲を人気順で(1ページ200曲まで。それより多い人も上位200曲で十分)
+async function utanetArtistSongs(unId: string): Promise<Hit[]> {
+  if (!/^\d+$/.test(unId)) return [];
+  const html = await get(`https://www.uta-net.com/artist/${unId}/4/`, { timeout: 12000 });
+  const out: Hit[] = [];
+  const re = /<a href="\/song\/(\d+)\/"[^>]*>\s*<span class="fw-bold songlist-title[^"]*">([\s\S]*?)<\/span>([\s\S]*?)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const c = m[3].match(/crown_(million|platinum|gold)/)?.[1];
+    out.push({
+      source: 'utanet',
+      id: m[1],
+      title: stripTags(m[2]).trim(),
+      artist: '',
+      url: `https://www.uta-net.com/chord/${m[1]}/`,
+      crown: c === 'million' ? 3 : c === 'platinum' ? 2 : c === 'gold' ? 1 : 0,
+    });
+  }
+  return out;
+}
+
 async function utanetSheet(id: string) {
   if (!/^\d+$/.test(id)) throw new HttpError(400, 'bad id');
   const html = await get(`https://www.uta-net.com/chord/${id}/`);
@@ -244,7 +296,12 @@ async function utanetSheet(id: string) {
 
 // ---------------------------------------------------------------- iTunes(曲名の正規化・ジャケット)
 
-type Cand = { title: string; artist: string; artwork: string; appleId: number; durationMs: number; base: string };
+type Cand = { title: string; artist: string; artwork: string; appleId: number; appleUrl: string; durationMs: number; base: string };
+
+// Apple Music の曲のページ(album/…?i=曲 の形。Music アプリがいちばん確実に開ける)
+function appleUrlOf(x: { trackViewUrl?: string }) {
+  return (x.trackViewUrl || '').replace(/[?&]uo=\d+/, '').replace(/\?$/, '') || '';
+}
 
 async function itunes(q: string): Promise<Cand[]> {
   const r = await fetch(
@@ -265,9 +322,47 @@ async function itunes(q: string): Promise<Cand[]> {
       artist: x.artistName,
       artwork: x.artworkUrl100,
       appleId: x.trackId,
+      appleUrl: appleUrlOf(x),
       durationMs: x.trackTimeMillis,
       base,
     });
+  }
+  return out;
+}
+
+type AppleInfo = { artwork: string; appleId: number; appleUrl: string; durationMs: number; released: string; plain: boolean };
+
+// アーティストの曲(Apple Music にあるもの)を曲名ごとに。ジャケット・曲の長さ・発売日に使う
+async function itunesArtistSongs(name: string) {
+  const out = new Map<string, AppleInfo>();
+  const r = await fetch(
+    `https://itunes.apple.com/search?term=${encodeURIComponent(name)}&country=jp&entity=song&attribute=artistTerm&limit=200&lang=ja_jp`,
+    { signal: AbortSignal.timeout(8000) },
+  );
+  if (!r.ok) return out;
+  const j = await r.json();
+  for (const x of j.results ?? []) {
+    if (!sameArtist(x.artistName, name)) continue;
+    const base = baseTitle(x.trackName);
+    const k = fold(base);
+    const released = String(x.releaseDate || '').slice(0, 10);
+    // 「(Live)」「- Instrumental」などの付かない版を優先し、同じなら先に出たもの(シングル)を使う
+    const it: AppleInfo = {
+      artwork: x.artworkUrl100,
+      appleId: x.trackId,
+      appleUrl: appleUrlOf(x),
+      durationMs: x.trackTimeMillis,
+      released,
+      plain: norm(x.trackName) === norm(base),
+    };
+    const cur = out.get(k);
+    if (!cur) {
+      out.set(k, it);
+      continue;
+    }
+    const better = (it.plain && !cur.plain) || (it.plain === cur.plain && released && (!cur.released || released < cur.released));
+    const first = [cur.released, released].filter(Boolean).sort()[0] || '';
+    out.set(k, { ...(better ? it : cur), released: first });
   }
   return out;
 }
@@ -394,7 +489,7 @@ function formHit(forms: string[], text: string) {
 async function search(qRaw: string) {
   const q = qRaw.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!q) return { groups: [] };
-  const ck = 'search3:' + fold(q);
+  const ck = 'search4:' + fold(q);
   const cached = await cacheGet(ck, SEARCH_TTL_MS);
   if (cached) return cached;
 
@@ -418,8 +513,9 @@ async function search(qRaw: string) {
     cwFor(q);
   }
 
-  // 1) 単語ごとの候補(かな→漢字・英字)・U-FRET・iTunes(そのまま)を同時に引く
+  // 1) 単語ごとの候補(かな→漢字・英字)・U-FRET・iTunes(そのまま)・アーティスト名を同時に引く
   const itRawP = itunes(q).catch(() => [] as Cand[]);
+  const unArtRawP = utanetArtists(q).catch(() => [] as ArtistHit[]);
   const [words, ufRaw] = await Promise.all([understand(q), ufretSearch(q).catch(() => [] as Hit[])]);
 
   // 2) かなを変換したときだけ、iTunes を「変換後」「変換の第2候補」でも引く
@@ -429,6 +525,8 @@ async function search(qRaw: string) {
   const amb = words.findIndex((w) => w.alts.length >= 2);
   if (amb >= 0) itQueries.push(words.map((w, i) => (i === amb ? w.alts[1] : w.alts[0] || w.raw)).join(' '));
   const itLists = await Promise.all([itRawP, ...itQueries.map((x) => itunes(x).catch(() => [] as Cand[]))]);
+  // かなで入れたアーティスト名(「あいみょん」はそのまま、「よるしか」→「ヨルシカ」)は変換後でも探す
+  const unArtP = Promise.all([unArtRawP, fold(conv) !== fold(q) ? utanetArtists(conv).catch(() => [] as ArtistHit[]) : []]);
 
   // 検索語の単語がいくつ曲名・アーティスト名に当たるか
   const rel = (title: string, artist: string) => {
@@ -538,7 +636,7 @@ async function search(qRaw: string) {
   };
   for (const c of cands.slice(0, 12)) {
     if (!groups.some((g) => fold(g.title) === fold(c.base) && sameArtist(g.artist, c.artist))) {
-      groups.push({ title: c.base, artist: c.artist, sources: [], artwork: c.artwork, appleId: c.appleId, durationMs: c.durationMs });
+      groups.push({ title: c.base, artist: c.artist, sources: [], artwork: c.artwork, appleId: c.appleId, appleUrl: c.appleUrl, durationMs: c.durationMs });
     }
   }
   const ufSorted = [...uf].sort((a, b) => Number((a.badges ?? []).includes('初心者ver')) - Number((b.badges ?? []).includes('初心者ver')));
@@ -558,7 +656,7 @@ async function search(qRaw: string) {
   for (const g of groups) {
     if (g.artwork) continue;
     const c = cands.find((c) => fold(c.base) === fold(g.title) && sameArtist(c.artist, g.artist));
-    if (c) Object.assign(g, { artwork: c.artwork, appleId: c.appleId, durationMs: c.durationMs });
+    if (c) Object.assign(g, { artwork: c.artwork, appleId: c.appleId, appleUrl: c.appleUrl, durationMs: c.durationMs });
   }
 
   // ---- 並べ替え: 検索語に全部当たる曲 > 曲名が一致 > 人気(歌ネットの人気順・王冠) > iTunesの順
@@ -576,8 +674,89 @@ async function search(qRaw: string) {
   const ranked = groups.map((g, i) => ({ g, s: score(g, i) })).sort((a, b) => b.s - a.s).map((x) => x.g);
   const withSheets = ranked.filter((g) => g.sources.length).slice(0, 40);
   const without = ranked.filter((g) => !g.sources.length && rel(g.title, g.artist).all).slice(0, 3);
-  const result = { q, groups: [...withSheets, ...without], understood: fold(conv) !== fold(q) ? conv : null };
+
+  // ---- アーティストの候補: 名前がそのまま一致する人。曲名として探したのでなければ、名前の一部で当たる主な人も
+  const qf = fold(q);
+  const cf = fold(conv);
+  const titleSearch = withSheets.some((g) => rel(g.title, g.artist).exactTitle);
+  const artists: (ArtistHit & { exact: boolean; artwork: string | null })[] = [];
+  for (const a of (await unArtP).flat()) {
+    if (artists.some((x) => x.unId === a.unId)) continue;
+    const af = fold(a.name);
+    const exact = af === qf || af === cf;
+    const cover = Math.max(qf.length, cf.length) / Math.max(1, af.length);
+    if (!exact && (titleSearch || a.count < 3 || !rel('', a.name).all || (a.count < 30 && cover < 0.3))) continue;
+    const art = groups.find((g) => g.artwork && sameArtist(g.artist, a.name))?.artwork ?? cands.find((c) => sameArtist(c.artist, a.name))?.artwork ?? null;
+    artists.push({ ...a, exact, artwork: art });
+  }
+  artists.sort((a, b) => Number(b.exact) - Number(a.exact) || b.count - a.count);
+
+  const result = {
+    q,
+    groups: [...withSheets, ...without],
+    artists: artists.slice(0, 3),
+    understood: fold(conv) !== fold(q) ? conv : null,
+  };
   if (withSheets.length) bg(cachePut(ck, result));
+  return result;
+}
+
+// ---------------------------------------------------------------- アーティストの曲一覧
+
+const ARTIST_TTL_MS = 24 * 3600e3;
+
+// 並びは歌ネットの人気順。U-FRET にだけある曲は後ろに(新着順)。Apple Music からジャケット・発売日を足す
+async function artistSongs(nameRaw: string, unIdRaw: string) {
+  const name = nameRaw.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!name) throw new HttpError(400, 'アーティスト名がありません');
+  const ck = 'artist1:' + fold(name);
+  const cached = await cacheGet(ck, ARTIST_TTL_MS);
+  if (cached) return cached;
+
+  const unIdP = /^\d+$/.test(unIdRaw)
+    ? Promise.resolve(unIdRaw)
+    : utanetArtists(name)
+        .then((l) => (l.find((a) => fold(a.name) === fold(name)) ?? l.find((a) => sameArtist(a.name, name)))?.unId ?? '')
+        .catch(() => '');
+  const [un, uf, apple] = await Promise.all([
+    unIdP.then((id) => (id ? utanetArtistSongs(id) : [])).catch(() => [] as Hit[]),
+    ufretArtistSongs(name).catch(() => [] as Hit[]),
+    itunesArtistSongs(name).catch(() => new Map<string, AppleInfo>()),
+  ]);
+
+  type Song = {
+    title: string;
+    rank: number | null;
+    crown: number;
+    uf: { id: string; label: string; easy: boolean }[];
+    un: string | null;
+    artwork?: string;
+    appleId?: number;
+    appleUrl?: string;
+    durationMs?: number;
+    released?: string;
+  };
+  const map = new Map<string, Song>();
+  un.forEach((h, i) => {
+    const k = fold(baseTitle(h.title));
+    if (k && !map.has(k)) map.set(k, { title: baseTitle(h.title), rank: i, crown: h.crown ?? 0, uf: [], un: h.id });
+  });
+  for (const h of uf) {
+    const k = fold(baseTitle(h.title));
+    if (!k) continue;
+    let s = map.get(k);
+    if (!s) map.set(k, (s = { title: baseTitle(h.title), rank: null, crown: 0, uf: [], un: null }));
+    const extra = h.title.normalize('NFKC').replace(baseTitle(h.title), '').trim();
+    s.uf.push({ id: h.id, label: [extra, ...(h.badges ?? [])].filter(Boolean).join('・'), easy: (h.badges ?? []).includes('初心者ver') });
+  }
+  const songs = [...map.entries()].map(([k, s]) => {
+    s.uf.sort((a, b) => Number(a.easy) - Number(b.easy)); // 初心者ver は後ろ(ふつうの版を先に開く)
+    const a = apple.get(k);
+    if (a) Object.assign(s, { artwork: a.artwork, appleId: a.appleId, appleUrl: a.appleUrl, durationMs: a.durationMs, released: a.released });
+    return s;
+  });
+  const result = { name, songs, withChords: songs.filter((s) => s.uf.length).length };
+  if (songs.length) bg(cachePut(ck, result));
   return result;
 }
 
@@ -755,6 +934,8 @@ Deno.serve(async (req) => {
       }
       case 'search':
         return json(await search(String(body.q || '')));
+      case 'artist':
+        return json(await artistSongs(String(body.name || ''), String(body.unId || '')));
       case 'sheet': {
         const s = await getSheet(String(body.source), String(body.id), String(body.title || ''), String(body.artist || ''), !!body.force);
         return json(s);
