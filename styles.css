@@ -3283,3 +3283,97 @@ html,
 body:has(.rec-dock) .toast-host {
   bottom: calc(176px + env(safe-area-inset-bottom));
 }
+
+/* ---------------------------------------------------------------- メトロノーム(テンポのパネル) */
+
+.metro {
+  margin: 14px 0 6px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--bg);
+}
+.metro-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.metro-row + .metro-row {
+  margin-top: 10px;
+}
+.btn.metro-btn.is-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.metro-dots {
+  display: flex;
+  gap: 8px;
+}
+.metro-dots i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  transition: transform 0.06s, background 0.06s;
+}
+.metro-dots i.is-head {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.metro-dots i.on {
+  background: var(--accent);
+  transform: scale(1.35);
+}
+.metro .panel-note {
+  margin: 10px 0 0;
+}
+
+/* ---------------------------------------------------------------- チューナー: ずれの大きさ・合わせ終わった弦 */
+
+.tuner-cents b {
+  font: 700 1.25rem var(--chord-font);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tuner-cents small {
+  font-size: 0.72rem;
+}
+.tuner-cents.is-near b {
+  color: #d99a1c;
+}
+.tuner-cents.is-far b {
+  color: var(--danger);
+}
+.tuner-gauge.is-ok .tuner-cents b {
+  color: var(--good);
+}
+.tuner-string em {
+  font: 700 0.7rem var(--chord-font);
+  font-style: normal;
+  color: var(--muted);
+  min-height: 1.1em;
+  font-variant-numeric: tabular-nums;
+}
+.tuner-string.is-done {
+  background: color-mix(in srgb, var(--good) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--good) 70%, transparent);
+}
+.tuner-string.is-done b,
+.tuner-string.is-done em {
+  color: var(--good);
+}
+.tuner-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.tuner-progress.is-all {
+  color: var(--good);
+  font-size: 0.98rem;
+}

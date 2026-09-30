@@ -6,6 +6,7 @@ import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast }
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
 import { useAutoScroll } from './autoscroll.js';
 import { TunerSheet } from './tuner.js';
+import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
 import { rankCapos, shapeName, guitarVoicings, standardVoicing, planVoicings } from '../music/guitar.js';
@@ -347,7 +348,7 @@ function SongReady({ song, reload }) {
       }
     : null;
 
-  const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click, durationMs: song.durationMs, fitSong, clock });
+  const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn, click: st.click ?? prefs.click, durationMs: song.durationMs, fitSong, clock, clickVolume: prefs.clickVolume ?? 1 });
 
   // 録音を選んだら、この端末に保存して(大きすぎるときは今回だけ)、録音に合わせるモードにする
   const attachRec = async (file) => {
@@ -702,7 +703,17 @@ function SongReady({ song, reload }) {
       bpmKnown=${bpmKnown}
       beatsPerBar=${beatsPerBar}
       click=${st.click ?? prefs.click}
-      onClick=${() => setSt({ click: !(st.click ?? prefs.click) })}
+      onClick=${() => {
+        const on = !(st.click ?? prefs.click);
+        setSt({ click: on });
+        // オンにしたら、その場で1回鳴らして音が出ることを知らせる(マナーモードでも鳴る)
+        if (on) {
+          holdPlayback();
+          clickSound(true, 0, prefs.clickVolume ?? 1);
+          setTimeout(releasePlayback, 600);
+        }
+        toast(on ? (scroll.playing ? 'クリック音を鳴らします' : 'クリック音オン（▶ で流すと拍に合わせて鳴ります）') : 'クリック音オフ', { ms: 1800 });
+      }}
       onTempo=${() => setPanel('tempo')}
       looping=${!!scroll.loop || !!loopSel}
       onLoop=${toggleLoop}
@@ -722,6 +733,9 @@ function SongReady({ song, reload }) {
       fit=${scroll.fit}
       fitSong=${fitSong}
       durationMs=${song.durationMs}
+      beatsPerBar=${beatsPerBar}
+      clickVolume=${prefs.clickVolume ?? 1}
+      setClickVolume=${(v) => setPrefs({ clickVolume: v })}
     />
     <${TextPanel} open=${panel === 'text'} onClose=${() => setPanel(null)} fontScale=${fontScale} setSt=${setSt} />
     <${MorePanel}
@@ -1147,7 +1161,62 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument }) {
 
 const mmss = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
 
-function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs }) {
+// メトロノームだけを鳴らす(自動スクロールとは別に、テンポの確認・練習用)。先の拍を少し前もって予約するので、ずれにくい
+function Metronome({ bpm, beatsPerBar = 4, volume, setVolume }) {
+  const [on, setOn] = useState(false);
+  const [beat, setBeat] = useState(-1);
+  const live = useRef({ bpm, volume, beatsPerBar });
+  live.current = { bpm, volume, beatsPerBar };
+  const rt = useRef(null);
+  const stop = () => {
+    const r = rt.current;
+    rt.current = null;
+    if (!r) return;
+    clearInterval(r.timer);
+    r.timeouts.forEach(clearTimeout);
+    releasePlayback();
+    setOn(false);
+    setBeat(-1);
+  };
+  const start = () => {
+    holdPlayback();
+    const c = audioCtx();
+    const r = { next: c.currentTime + 0.08, n: 0, timeouts: [], timer: 0 };
+    r.timer = setInterval(() => {
+      if (c.state === 'suspended') c.resume().catch?.(() => {}); // 電話などで止まったら鳴らし直す
+      const { bpm: B, volume: V, beatsPerBar: bpb } = live.current;
+      while (r.next < c.currentTime + 0.12) {
+        const k = r.n % bpb;
+        clickSound(k === 0, r.next, V);
+        const wait = Math.max(0, (r.next - c.currentTime) * 1000);
+        r.timeouts.push(setTimeout(() => setBeat(k), wait));
+        if (r.timeouts.length > 16) r.timeouts.splice(0, 8);
+        r.next += 60 / B;
+        r.n++;
+      }
+    }, 25);
+    rt.current = r;
+    setOn(true);
+  };
+  useEffect(() => stop, []);
+  return html`<div className="metro">
+    <div className="metro-row">
+      <button className=${cx('btn metro-btn', on && 'is-on')} onClick=${() => (on ? stop() : start())}>
+        <${Icon} name="metronome" size=${18} /> ${on ? '止める' : 'メトロノームを鳴らす'}
+      </button>
+      <div className="metro-dots" aria-hidden="true">
+        ${Array.from({ length: Math.min(8, beatsPerBar) }, (_, i) => html`<i key=${i} className=${cx(i === beat && 'on', i === 0 && 'is-head')}></i>`)}
+      </div>
+    </div>
+    <div className="metro-row">
+      <span className="muted small">クリックの大きさ</span>
+      <${Segmented} size="sm" label="クリックの大きさ" value=${volume} onChange=${setVolume} options=${[{ value: 0.6, label: '小' }, { value: 1, label: '中' }, { value: 1.5, label: '大' }]} />
+    </div>
+    <p className="panel-note">マナーモード（消音スイッチ）がオンでも鳴ります。自動スクロール中に鳴らしたいときは、下のバーのメトロノームのボタンをオンにしてください。</p>
+  </div>`;
+}
+
+function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, clickVolume = 1, setClickVolume }) {
   const taps = useRef([]);
   const tap = () => {
     const now = performance.now();
@@ -1171,6 +1240,7 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
       <button className="btn" onClick=${() => setSt({ bpm: Math.min(300, bpm * 2) })}>×2</button>
     </div>
     ${custom && origBpm ? html`<div className="row-gap center"><button className="btn btn-ghost" onClick=${() => setSt({ bpm: null })}>元のテンポ（${origBpm}）に戻す</button></div>` : null}
+    <${Metronome} bpm=${bpm} beatsPerBar=${beatsPerBar} volume=${clickVolume} setVolume=${setClickVolume} />
     <div className="panel-field">
       <${Switch}
         label=${durationMs ? `曲の長さ（${mmss(durationMs)}）に合わせる` : '曲の長さに合わせる'}

@@ -5,6 +5,7 @@ import htm from 'htm';
 import { Icon } from './icons.js';
 import { Sheet } from './common.js';
 import { cx, signed } from '../lib/util.js';
+import { chime, holdPlayback, releasePlayback } from '../lib/sound.js';
 const html = htm.bind(React.createElement);
 
 // 6弦 → 1弦(標準チューニング)
@@ -116,6 +117,17 @@ function Tuner() {
   const targetRef = useRef(null);
   targetRef.current = target;
   const rt = useRef(null);
+  // 合わせ終わった弦(ぴったりが0.6秒続いたら「ピコン」)と、弦ごとの最後のずれ(セント)
+  const [done, setDone] = useState(() => new Set());
+  const doneRef = useRef(new Set());
+  const [last, setLast] = useState({});
+  const stable = useRef({ n: null, count: 0 });
+  const resetDone = () => {
+    stable.current = { n: null, count: 0 };
+    doneRef.current = new Set();
+    setDone(new Set());
+    setLast({});
+  };
 
   const stop = () => {
     const r = rt.current;
@@ -157,7 +169,9 @@ function Tuner() {
       const sr = ctx.sampleRate / 2; // 半分に間引いて計算を軽くする(ギターの音域には十分)
       const hist = [];
       let lastHeard = 0;
+      let quietUntil = 0; // 「ピコン」の音をマイクで拾わないよう、鳴らした直後は測らない
       const timer = setInterval(() => {
+        if (performance.now() < quietUntil) return;
         an.getFloatTimeDomainData(raw);
         for (let i = 0; i < half.length; i++) half[i] = (raw[2 * i] + raw[2 * i + 1]) / 2;
         const p = detectPitch(half, sr);
@@ -183,7 +197,37 @@ function Tuner() {
         const near = locked || STRINGS.reduce((a, b) => (Math.abs(b.midi - mm) < Math.abs(a.midi - mm) ? b : a));
         const offString = !locked && Math.abs(near.midi - mm) > 2.5;
         const ref = offString ? Math.round(mm) : near.midi;
-        setReading({ midi: ref, cents: Math.round((mm - ref) * 100), freq: p.freq, string: offString ? null : near.n });
+        const rd = { midi: ref, cents: Math.round((mm - ref) * 100), freq: p.freq, string: offString ? null : near.n };
+        setReading(rd);
+        if (rd.string) {
+          setLast((x) => (x[rd.string] === rd.cents ? x : { ...x, [rd.string]: rd.cents }));
+          const st = stable.current;
+          const D = doneRef.current;
+          if (Math.abs(rd.cents) <= IN_TUNE) {
+            if (st.n === rd.string) st.count++;
+            else {
+              st.n = rd.string;
+              st.count = 1;
+            }
+            // ぴったりが0.6秒続いたら、その弦はできあがり
+            if (st.count === 12 && !D.has(rd.string)) {
+              D.add(rd.string);
+              doneRef.current = new Set(D);
+              setDone(new Set(D));
+              chime(D.size === STRINGS.length, ctx);
+              quietUntil = performance.now() + (D.size === STRINGS.length ? 900 : 600);
+              hist.length = 0;
+            }
+          } else {
+            st.count = 0;
+            // 合わせたあとで大きくずれたら、印を外す
+            if (Math.abs(rd.cents) > 15 && D.has(rd.string)) {
+              D.delete(rd.string);
+              doneRef.current = new Set(D);
+              setDone(new Set(D));
+            }
+          }
+        }
       }, 50);
       rt.current = { stream, ctx, timer };
       setStatus('on');
@@ -194,7 +238,11 @@ function Tuner() {
   };
 
   const pickString = (s) => {
+    // マイクを使っていないときは、マナーモードでも見本の音が聞こえるようにする
+    const listening = !!rt.current;
+    if (!listening) holdPlayback();
     playTone(s.midi);
+    if (!listening) setTimeout(releasePlayback, 2800);
     setTarget(s.n);
   };
 
@@ -202,19 +250,22 @@ function Tuner() {
   const ok = reading && Math.abs(cents) <= IN_TUNE;
   const angle = Math.max(-50, Math.min(50, cents)) * 1.2; // ±50セント → ±60度
   const pc = reading ? ((reading.midi % 12) + 12) % 12 : null;
+  const abs = Math.abs(cents);
+  const allDone = done.size === STRINGS.length;
+  // どれくらい離れているか: 50セント(半音の半分)までは「あと何セント」、それより大きいときは「半音いくつぶん」
   const guide = !reading
-    ? status === 'on'
-      ? '弦を1本ずつ鳴らしてください'
-      : ''
+    ? allDone
+      ? '6本ぜんぶ合いました！'
+      : status === 'on'
+        ? '弦を1本ずつ鳴らしてください'
+        : ''
     : ok
-      ? 'ぴったり！'
-      : cents < -50
-        ? 'かなり低い（ペグを巻いて上げる）'
-        : cents > 50
-          ? 'かなり高い（ペグをゆるめて下げる）'
-          : cents < 0
-            ? '少し低い（ペグを少し巻く）'
-            : '少し高い（ペグを少しゆるめる）';
+      ? reading.string && done.has(reading.string)
+        ? `ぴったり！ ${reading.string}弦 OK`
+        : 'ぴったり！ そのまま鳴らしていてください'
+      : abs > 50
+        ? `かなり${cents < 0 ? '低い' : '高い'}（半音 ${(abs / 100).toFixed(1)} 個ぶん）… ペグを${cents < 0 ? '巻いて上げる' : 'ゆるめて下げる'}`
+        : `少し${cents < 0 ? '低い' : '高い'}（あと ${abs} セント）… ペグを少し${cents < 0 ? '巻く' : 'ゆるめる'}`;
 
   return html`<div className="tuner">
     <div className=${cx('tuner-gauge', ok && 'is-ok', reading && 'is-live')}>
@@ -234,7 +285,9 @@ function Tuner() {
         <b>${reading ? NOTE[pc] : '–'}</b>
         <span>${reading ? `${DO[pc]}${reading.string ? ` ・ ${reading.string}弦` : ''}` : status === 'on' ? '聞いています…' : ''}</span>
       </div>
-      <div className="tuner-cents">${reading ? `${signed(cents)} セント ・ ${reading.freq.toFixed(1)} Hz` : ' '}</div>
+      <div className=${cx('tuner-cents', reading && !ok && (abs > 50 ? 'is-far' : 'is-near'))}>
+        ${reading ? html`<b>${signed(cents)}</b> セント <small>（100で半音 ・ ${reading.freq.toFixed(1)} Hz）</small>` : ' '}
+      </div>
     </div>
     <p className=${cx('tuner-guide', ok && 'is-ok')} aria-live="polite">${guide || ' '}</p>
 
@@ -255,14 +308,21 @@ function Tuner() {
       ${STRINGS.map(
         (s) => html`<button
           key=${s.n}
-          className=${cx('tuner-string', target === s.n && 'is-target', reading && reading.string === s.n && 'is-hit', reading && reading.string === s.n && ok && 'is-ok')}
+          className=${cx('tuner-string', target === s.n && 'is-target', reading && reading.string === s.n && 'is-hit', done.has(s.n) && 'is-done', reading && reading.string === s.n && ok && 'is-ok')}
           onClick=${() => pickString(s)}
-          aria-label=${`${s.n}弦 ${s.name} の見本の音`}
+          aria-label=${`${s.n}弦 ${s.name} の見本の音${done.has(s.n) ? '（合わせ済み）' : ''}`}
         >
           <small>${s.n}弦</small><b>${s.name}</b>
+          <em>${done.has(s.n) ? '✓ OK' : last[s.n] != null ? signed(last[s.n]) : '—'}</em>
         </button>`,
       )}
     </div>
+    ${status === 'on'
+      ? html`<div className=${cx('tuner-progress', allDone && 'is-all')}>
+          <span>${allDone ? '6本ぜんぶ合いました！' :`合わせた弦 ${done.size} / 6`}</span>
+          ${done.size ? html`<button className="link-btn" onClick=${resetDone}>やり直す</button>` : null}
+        </div>`
+      : null}
     <div className="tuner-foot">
       <span className="muted small">${target ? `${target}弦に合わせています` : '鳴らした弦を自動で見分けます'}（弦をタップすると見本の音）</span>
       ${target ? html`<button className="btn btn-sm btn-ghost" onClick=${() => setTarget(null)}>自動にもどす</button>` : null}

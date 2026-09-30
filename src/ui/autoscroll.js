@@ -2,6 +2,7 @@
 // 譜面の各行に「何拍ぶんか」を割り当てて時間軸を作り、今の拍が画面の上から3割の位置に来るよう滑らかに動かす。
 // 途中で指やホイールで動かすと一時停止し、手を離したところから続きを刻む。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { audioCtx, click as clickSound, holdPlayback, releasePlayback } from '../lib/sound.js';
 
 // 小節線の無い行の長さ(小節数)の見積もり。
 // ChordWiki の小節線つき譜面(10曲・333行)で、コード数と歌詞の音数から実際の小節数を当てはめた式。
@@ -59,32 +60,13 @@ export function timeAtBeat(b, anchors, starts, bps) {
   return p[L][0] + (b - p[L][1]) / (L > 0 ? rate(L - 1) : bps);
 }
 
-let audioCtx = null;
-function clickSound(accent) {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    const t = audioCtx.currentTime;
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.frequency.value = accent ? 1760 : 1175;
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.28, t + 0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-    o.connect(g).connect(audioCtx.destination);
-    o.start(t);
-    o.stop(t + 0.06);
-  } catch {}
-}
 export function unlockAudio() {
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    audioCtx.resume();
-  } catch {}
+  audioCtx();
 }
 
 // clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
-export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null }) {
+// clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
+export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1 }) {
   const [playing, setPlaying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -111,7 +93,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   // 曲の長さに合わせる: 譜面の拍を進める速さだけを変える(クリック音は本来のBPMのまま)
   const fit = useMemo(() => songFit(tl.total, bpm, durationMs), [tl.total, bpm, durationMs]);
   const scrollRate = fitSong && fit && fit.usable ? 1 / fit.ratio : 1;
-  live.current = { bpm, click, countIn, beatsPerBar, scrollRate, clock };
+  live.current = { bpm, click, countIn, beatsPerBar, scrollRate, clock, clickVolume };
   const clockBeat = () => {
     const c = live.current.clock;
     return beatAtTime(c.time(), c.anchors, s.tl.starts, c.bps);
@@ -271,7 +253,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     const whole = Math.floor(s.clickPhase + 1e-6);
     if (whole !== s.lastInt) {
       s.lastInt = whole;
-      if (!s.holding && (C || s.countEnd != null)) clickSound(((whole % bpb) + bpb) % bpb === 0);
+      if (!s.holding && (C || s.countEnd != null)) clickSound(((whole % bpb) + bpb) % bpb === 0, 0, live.current.clickVolume);
       showBeat(((whole % bpb) + bpb) % bpb);
     }
     if (!s.holding) setScroll(posAtBeat(eff) - anchor());
@@ -462,9 +444,22 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     setLoopState(null);
   }, [lines]);
 
+  // クリック音を鳴らしながら流している間だけ、マナーモードでも聞こえるようにする
+  useEffect(() => {
+    const want = playing && click && !clock;
+    if (want && !s.held) {
+      holdPlayback();
+      s.held = true;
+    } else if (!want && s.held) {
+      releasePlayback();
+      s.held = false;
+    }
+  }, [playing, click, !!clock]);
+
   useEffect(() => () => {
     s.playingFlag = false;
     cancelAnimationFrame(s.raf);
+    if (s.held) releasePlayback();
   }, []);
 
   return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop, bindBeat };

@@ -17,6 +17,7 @@ export const DEFAULT_PREFS = {
   barsPerLine: 0, // 小節線の無い譜面で、歌詞1行を何小節とみなすか(0 = コード数と歌詞の長さから自動)
   countIn: true,
   click: false,
+  clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
   appleCardDismissed: false,
   homeSort: 'recent', // recent | added | title
