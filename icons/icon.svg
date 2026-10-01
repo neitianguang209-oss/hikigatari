@@ -1,91 +1,239 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- ひきがたり アイコンの元絵: 夕暮れから夜へ変わる空、大きな月、丘の上でギターを弾き語りする人のシルエット
+  <!-- ひきがたり アイコンの元絵: 朝の青空と雲、朝日の光を受けたアコースティックギター、音符
        PNG は icons/render-icons.ps1 で作る(Edge で描いて縮小) -->
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#141938" />
-      <stop offset="0.4" stop-color="#352d6c" />
-      <stop offset="0.7" stop-color="#8f5689" />
-      <stop offset="0.88" stop-color="#df8a84" />
-      <stop offset="1" stop-color="#f2b081" />
+    <linearGradient id="sky" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#1a62c4" />
+      <stop offset="0.45" stop-color="#3f8fe3" />
+      <stop offset="0.8" stop-color="#8cc6f3" />
+      <stop offset="1" stop-color="#c9e6fb" />
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0.56" stop-color="#fff3d6" stop-opacity="0.34" />
-      <stop offset="1" stop-color="#fff3d6" stop-opacity="0" />
+    <radialGradient id="sunGlow" cx="250" cy="230" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fffbe8" stop-opacity="0.95" />
+      <stop offset="0.18" stop-color="#fff4d0" stop-opacity="0.55" />
+      <stop offset="0.5" stop-color="#e6f3ff" stop-opacity="0.18" />
+      <stop offset="1" stop-color="#e6f3ff" stop-opacity="0" />
     </radialGradient>
-    <radialGradient id="moon" cx="0.42" cy="0.36" r="0.72">
-      <stop offset="0" stop-color="#fffbf2" />
-      <stop offset="1" stop-color="#ffe3b0" />
-    </radialGradient>
-    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#4b356f" />
-      <stop offset="1" stop-color="#2b2350" />
+    <linearGradient id="cloudNear" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="0.55" stop-color="#f4f9fe" />
+      <stop offset="1" stop-color="#cfe2f5" />
     </linearGradient>
+    <linearGradient id="cloudFar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95" />
+      <stop offset="1" stop-color="#d7e9f9" stop-opacity="0.8" />
+    </linearGradient>
+
+    <!-- ギター(縦向きのローカル座標: 胴の中心が 0,0、ヘッドが上) -->
+    <radialGradient id="top" cx="-30" cy="10" r="330" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fde7bb" />
+      <stop offset="0.5" stop-color="#f3c47e" />
+      <stop offset="0.78" stop-color="#e09650" />
+      <stop offset="0.92" stop-color="#b3602c" />
+      <stop offset="1" stop-color="#7e3818" />
+    </radialGradient>
+    <linearGradient id="side" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5a2610" />
+      <stop offset="1" stop-color="#8a4420" />
+    </linearGradient>
+    <radialGradient id="hole" cx="0" cy="-110" r="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b0f07" />
+      <stop offset="0.75" stop-color="#2a170b" />
+      <stop offset="1" stop-color="#4a2a15" />
+    </radialGradient>
+    <linearGradient id="board" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2e190e" />
+      <stop offset="0.5" stop-color="#4a2a18" />
+      <stop offset="1" stop-color="#2a160c" />
+    </linearGradient>
+    <linearGradient id="head" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2a170c" />
+      <stop offset="0.45" stop-color="#4b2a17" />
+      <stop offset="1" stop-color="#26140a" />
+    </linearGradient>
+    <radialGradient id="peg" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#fffaf0" />
+      <stop offset="0.5" stop-color="#e3d6bd" />
+      <stop offset="1" stop-color="#a8977a" />
+    </radialGradient>
+    <radialGradient id="sheen" cx="-70" cy="-40" r="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+
+    <path id="bodyShape" d="M0 -290 C 92 -290 160 -258 160 -172 C 160 -104 120 -72 122 -30 C 124 12 206 42 206 142 C 206 262 122 332 0 332 C -122 332 -206 262 -206 142 C -206 42 -124 12 -122 -30 C -120 -72 -160 -104 -160 -172 C -160 -258 -92 -290 0 -290 Z" />
+    <clipPath id="bodyClip"></clipPath>
+
+    <!-- 雲の形(影の色の上に、少し左上へずらした白を重ねて立体に見せる) -->
+    <g id="cf1"><circle cx="858" cy="318" r="40" /><circle cx="902" cy="296" r="54" /><circle cx="958" cy="320" r="40" /><circle cx="926" cy="336" r="30" /><rect x="818" y="318" width="190" height="40" rx="20" /></g>
+    <g id="cf2"><circle cx="96" cy="470" r="30" /><circle cx="140" cy="452" r="42" /><circle cx="186" cy="472" r="30" /><rect x="66" y="470" width="150" height="30" rx="15" /></g>
+    <g id="cn1"><circle cx="40" cy="850" r="120" /><circle cx="150" cy="830" r="70" /><circle cx="170" cy="900" r="96" /><circle cx="300" cy="960" r="90" /><rect x="-40" y="900" width="420" height="160" /></g>
+    <g id="cn2"><circle cx="690" cy="900" r="104" /><circle cx="752" cy="800" r="66" /><circle cx="812" cy="830" r="128" /><circle cx="944" cy="868" r="112" /><circle cx="900" cy="740" r="60" /><circle cx="590" cy="968" r="84" /><circle cx="1030" cy="930" r="96" /><rect x="560" y="900" width="500" height="160" /></g>
+    <clipPath id="cf1c"><circle cx="858" cy="318" r="40" /><circle cx="902" cy="296" r="54" /><circle cx="958" cy="320" r="40" /><circle cx="926" cy="336" r="30" /><rect x="818" y="318" width="190" height="40" rx="20" /></clipPath>
+    <clipPath id="cf2c"><circle cx="96" cy="470" r="30" /><circle cx="140" cy="452" r="42" /><circle cx="186" cy="472" r="30" /><rect x="66" y="470" width="150" height="30" rx="15" /></clipPath>
+    <clipPath id="cn1c"><circle cx="40" cy="850" r="120" /><circle cx="150" cy="830" r="70" /><circle cx="170" cy="900" r="96" /><circle cx="300" cy="960" r="90" /><rect x="-40" y="900" width="420" height="160" /></clipPath>
+    <clipPath id="cn2c"><circle cx="690" cy="900" r="104" /><circle cx="752" cy="800" r="66" /><circle cx="812" cy="830" r="128" /><circle cx="944" cy="868" r="112" /><circle cx="900" cy="740" r="60" /><circle cx="590" cy="968" r="84" /><circle cx="1030" cy="930" r="96" /><rect x="560" y="900" width="500" height="160" /></clipPath>
+
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" />
+      <feOffset dx="22" dy="30" result="b" />
+      <feFlood flood-color="#0a3a7a" flood-opacity="0.38" />
+      <feComposite in2="b" operator="in" />
+      <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+    <filter id="sunBlur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="18" /></filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" />
+    </filter>
+    <filter id="noteShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="4" dy="6" stdDeviation="6" flood-color="#0b3f86" flood-opacity="0.3" />
+    </filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="7" />
+      <feColorMatrix type="saturate" values="0" />
+    </filter>
   </defs>
 
+  <!-- 空と朝日 -->
   <rect width="1024" height="1024" fill="url(#sky)" />
+  <rect width="1024" height="1024" fill="url(#sunGlow)" />
+  <circle cx="250" cy="230" r="104" fill="#fff6d2" opacity="0.75" filter="url(#sunBlur)" />
+  <circle cx="250" cy="230" r="78" fill="#fffdf3" />
 
-  <!-- 星 -->
-  <g fill="#ffffff">
-    <circle cx="150" cy="150" r="5" opacity="0.9" />
-    <circle cx="300" cy="96" r="3" opacity="0.7" />
-    <circle cx="880" cy="130" r="4.5" opacity="0.85" />
-    <circle cx="940" cy="300" r="3" opacity="0.55" />
-    <circle cx="96" cy="340" r="3.5" opacity="0.6" />
-    <circle cx="700" cy="74" r="2.5" opacity="0.6" />
-    <circle cx="214" cy="262" r="2.5" opacity="0.5" />
+  <!-- 遠くの雲 -->
+  <use href="#cf1" fill="#c6dcf2" />
+  <g clip-path="url(#cf1c)"><use href="#cf1" fill="url(#cloudFar)" transform="translate(-5 -9)" /></g>
+  <g opacity="0.85">
+    <use href="#cf2" fill="#c6dcf2" />
+    <g clip-path="url(#cf2c)"><use href="#cf2" fill="url(#cloudFar)" transform="translate(-4 -7)" /></g>
   </g>
 
-  <!-- 月 -->
-  <circle cx="540" cy="500" r="380" fill="url(#glow)" />
-  <circle cx="540" cy="500" r="290" fill="url(#moon)" />
+  <!-- 手前の雲(左下、ギターの後ろ) -->
+  <use href="#cn1" fill="#9fc2e8" opacity="0.55" transform="translate(10 18)" filter="url(#soft)" />
+  <use href="#cn1" fill="#c3d9f0" />
+  <g clip-path="url(#cn1c)"><use href="#cn1" fill="url(#cloudNear)" transform="translate(-10 -16)" /></g>
 
-  <!-- 遠くの丘と町の灯り -->
-  <path d="M0 772 C 140 738 260 744 380 762 C 520 782 640 744 780 737 C 880 732 960 744 1024 754 L1024 1024 L0 1024 Z" fill="url(#far)" />
-  <g fill="#ffd38a">
-    <circle cx="66" cy="792" r="4" opacity="0.9" />
-    <circle cx="108" cy="784" r="3" opacity="0.7" />
-    <circle cx="166" cy="798" r="3.5" opacity="0.8" />
-    <circle cx="226" cy="788" r="2.5" opacity="0.6" />
-    <circle cx="826" cy="770" r="3.5" opacity="0.8" />
-    <circle cx="874" cy="780" r="4" opacity="0.9" />
-    <circle cx="930" cy="772" r="3" opacity="0.7" />
-    <circle cx="974" cy="786" r="3.5" opacity="0.8" />
+  <!-- ギター -->
+  <g filter="url(#shadow)">
+    <g transform="translate(470 560) rotate(38) scale(0.8) translate(0 275)">
+      <!-- 胴の厚み(横板) -->
+      <use href="#bodyShape" fill="url(#side)" transform="translate(-14 12)" />
+      <!-- 表板 -->
+      <use href="#bodyShape" fill="url(#top)" />
+      <g clip-path="url(#bodyClip)">
+        <!-- 木目 -->
+        <g stroke="#b06a32" stroke-width="1.6" opacity="0.18">
+          <line x1="-150" y1="-300" x2="-150" y2="340" />
+          <line x1="-118" y1="-300" x2="-118" y2="340" />
+          <line x1="-92" y1="-300" x2="-92" y2="340" />
+          <line x1="-64" y1="-300" x2="-64" y2="340" />
+          <line x1="-40" y1="-300" x2="-40" y2="340" />
+          <line x1="-14" y1="-300" x2="-14" y2="340" />
+          <line x1="12" y1="-300" x2="12" y2="340" />
+          <line x1="40" y1="-300" x2="40" y2="340" />
+          <line x1="70" y1="-300" x2="70" y2="340" />
+          <line x1="98" y1="-300" x2="98" y2="340" />
+          <line x1="128" y1="-300" x2="128" y2="340" />
+          <line x1="160" y1="-300" x2="160" y2="340" />
+        </g>
+        <rect x="-220" y="-300" width="440" height="640" fill="url(#sheen)" />
+      </g>
+      <!-- ふち(バインディング) -->
+      <use href="#bodyShape" fill="none" stroke="#fff3dc" stroke-width="8" />
+      <use href="#bodyShape" fill="none" stroke="#5a2610" stroke-width="2" transform="scale(1.012)" opacity="0.5" />
+
+
+      <!-- サウンドホールとロゼッタ -->
+      <circle cx="0" cy="-110" r="92" fill="none" stroke="#fff3dc" stroke-width="3" />
+      <circle cx="0" cy="-110" r="83" fill="none" stroke="#6b3418" stroke-width="10" />
+      <circle cx="0" cy="-110" r="83" fill="none" stroke="#f3d39a" stroke-width="5" stroke-dasharray="4 4" />
+      <circle cx="0" cy="-110" r="73" fill="none" stroke="#fff3dc" stroke-width="3" />
+      <circle cx="0" cy="-110" r="64" fill="url(#hole)" />
+      <path d="M-58 -132 A 62 62 0 0 1 40 -158" fill="none" stroke="#000" stroke-width="10" opacity="0.25" />
+
+      <!-- ブリッジ -->
+      <rect x="-86" y="156" width="172" height="40" rx="14" fill="#33190c" />
+      <rect x="-86" y="156" width="172" height="10" rx="5" fill="#5a3019" opacity="0.8" />
+      <rect x="-54" y="166" width="108" height="6" rx="3" fill="#fbf1de" />
+      <g fill="#f4ead6">
+        <circle cx="-27" cy="184" r="4" /><circle cx="-16.2" cy="184" r="4" /><circle cx="-5.4" cy="184" r="4" />
+        <circle cx="5.4" cy="184" r="4" /><circle cx="16.2" cy="184" r="4" /><circle cx="27" cy="184" r="4" />
+      </g>
+
+      <!-- ネックと指板 -->
+      <path d="M-26 -724 L 26 -724 L 34 -270 L -34 -270 Z" fill="#7a3d1c" />
+      <path d="M-23 -722 L 23 -722 L 30 -188 L -30 -188 Z" fill="url(#board)" />
+      <g stroke="#e8e2d6" stroke-width="3.2" stroke-linecap="round">
+        <line x1="-23.6" y1="-669.5" x2="23.6" y2="-669.5" />
+        <line x1="-24.3" y1="-621.8" x2="24.3" y2="-621.8" />
+        <line x1="-24.9" y1="-576.8" x2="24.9" y2="-576.8" />
+        <line x1="-25.4" y1="-534.4" x2="25.4" y2="-534.4" />
+        <line x1="-25.9" y1="-494.4" x2="25.9" y2="-494.4" />
+        <line x1="-26.4" y1="-456.4" x2="26.4" y2="-456.4" />
+        <line x1="-26.9" y1="-420.7" x2="26.9" y2="-420.7" />
+        <line x1="-27.3" y1="-387" x2="27.3" y2="-387" />
+        <line x1="-27.7" y1="-355.2" x2="27.7" y2="-355.2" />
+        <line x1="-28.1" y1="-325.2" x2="28.1" y2="-325.2" />
+        <line x1="-28.5" y1="-296.9" x2="28.5" y2="-296.9" />
+        <line x1="-28.9" y1="-270" x2="28.9" y2="-270" />
+        <line x1="-29.2" y1="-245" x2="29.2" y2="-245" />
+        <line x1="-29.5" y1="-221.2" x2="29.5" y2="-221.2" />
+        <line x1="-29.8" y1="-198.7" x2="29.8" y2="-198.7" />
+      </g>
+      <g fill="#f6efe2">
+        <circle cx="0" cy="-599" r="5.5" /><circle cx="0" cy="-514" r="5.5" />
+        <circle cx="0" cy="-438" r="5.5" /><circle cx="0" cy="-371" r="5.5" />
+        <circle cx="-12" cy="-283" r="5.5" /><circle cx="12" cy="-283" r="5.5" />
+      </g>
+
+      <!-- ヘッドとペグ -->
+      <g fill="url(#peg)">
+        <rect x="-62" y="-772" width="28" height="18" rx="9" /><rect x="34" y="-772" width="28" height="18" rx="9" />
+        <rect x="-64" y="-818" width="28" height="18" rx="9" /><rect x="36" y="-818" width="28" height="18" rx="9" />
+        <rect x="-66" y="-864" width="28" height="18" rx="9" /><rect x="38" y="-864" width="28" height="18" rx="9" />
+      </g>
+      <path d="M-25 -722 L -38 -800 C -42 -846 -40 -880 -22 -892 C -8 -886 8 -886 22 -892 C 40 -880 42 -846 38 -800 L 25 -722 Z" fill="url(#head)" />
+      <path d="M-20 -730 L -30 -800 C -33 -840 -32 -866 -20 -878" fill="none" stroke="#7a4626" stroke-width="2.5" opacity="0.7" />
+      <g fill="#e9dcc4">
+        <circle cx="-22" cy="-763" r="5" /><circle cx="22" cy="-763" r="5" />
+        <circle cx="-24" cy="-809" r="5" /><circle cx="24" cy="-809" r="5" />
+        <circle cx="-26" cy="-855" r="5" /><circle cx="26" cy="-855" r="5" />
+      </g>
+      <rect x="-25" y="-726" width="50" height="9" rx="2" fill="#fbf3e2" />
+
+      <!-- 弦 -->
+      <g stroke="#fbf6ec" stroke-linecap="round" opacity="0.92">
+        <line x1="-19" y1="-722" x2="-27" y2="169" stroke-width="3.6" />
+        <line x1="-11.4" y1="-722" x2="-16.2" y2="169" stroke-width="3.1" />
+        <line x1="-3.8" y1="-722" x2="-5.4" y2="169" stroke-width="2.7" />
+        <line x1="3.8" y1="-722" x2="5.4" y2="169" stroke-width="2.3" />
+        <line x1="11.4" y1="-722" x2="16.2" y2="169" stroke-width="1.9" />
+        <line x1="19" y1="-722" x2="27" y2="169" stroke-width="1.6" />
+      </g>
+    </g>
   </g>
 
-  <!-- 手前の丘と、人(頭・髪・胴・組んだ脚) -->
-  <g fill="#15122c">
-    <path d="M0 884 C 160 834 300 810 470 808 C 640 806 820 838 1024 902 L1024 1024 L0 1024 Z" />
-    <!-- 頭(少しうつむく)と、あごまでの髪 -->
-    <ellipse cx="462" cy="460" rx="45" ry="51" transform="rotate(18 462 460)" />
-    <ellipse cx="450" cy="448" rx="53" ry="51" />
-    <ellipse cx="426" cy="494" rx="28" ry="34" />
-    <path d="M432 500 L 478 500 L 486 556 L 428 558 Z" />
-    <path d="M386 574 C 398 546 484 532 522 556 C 540 600 532 660 520 704 L 534 792 L 378 798 C 372 726 372 636 386 574 Z" />
-    <path d="M336 818 C 322 790 344 764 398 760 L 604 754 C 646 754 668 784 656 816 Z" />
+  <!-- 手前の雲(右下、ギターの前) -->
+  <use href="#cn2" fill="#9fc2e8" opacity="0.6" transform="translate(-14 22)" filter="url(#soft)" />
+  <use href="#cn2" fill="#c3d9f0" />
+  <g clip-path="url(#cn2c)"><use href="#cn2" fill="url(#cloudNear)" transform="translate(-10 -16)" /></g>
+
+  <!-- 音符 -->
+  <g fill="#ffffff" filter="url(#noteShadow)">
+    <g transform="translate(742 470) rotate(-12)">
+      <ellipse cx="0" cy="0" rx="26" ry="19" transform="rotate(-22)" />
+      <ellipse cx="92" cy="-14" rx="26" ry="19" transform="rotate(-22 92 -14)" />
+      <rect x="15" y="-128" width="11" height="126" rx="3" />
+      <rect x="107" y="-142" width="11" height="126" rx="3" />
+      <path d="M15 -128 L 118 -142 L 118 -112 L 15 -98 Z" />
+    </g>
+    <g transform="translate(882 640) rotate(10)">
+      <ellipse cx="0" cy="0" rx="21" ry="15.5" transform="rotate(-22)" />
+      <rect x="12" y="-100" width="9" height="98" rx="3" />
+      <path d="M21 -100 C 44 -84 54 -62 44 -38 C 50 -60 40 -74 21 -78 Z" />
+    </g>
   </g>
 
-  <!-- ギター: ひざの上で、ネックは右上へ。胴は月の色のふちで見分ける -->
-  <g transform="rotate(-22 460 705)">
-    <path d="M346 705 C 346 652 380 630 420 632 C 452 634 466 652 490 652 C 512 652 522 640 550 640 C 584 640 604 670 604 705 C 604 740 584 770 550 770 C 522 770 512 758 490 758 C 466 758 452 776 420 778 C 380 780 346 758 346 705 Z" fill="#15122c" stroke="#ffe9c2" stroke-width="6" />
-    <circle cx="545" cy="705" r="17" fill="#ffe9c2" opacity="0.9" />
-    <rect x="598" y="694" width="262" height="22" rx="5" fill="#15122c" />
-    <path d="M856 688 L 918 680 C 927 679 932 684 932 691 L 932 719 C 932 726 927 731 918 730 L 856 722 Z" fill="#15122c" />
-  </g>
-
-  <!-- 腕: 左手でネックを押さえ、右手は胴の上で弾く -->
-  <g fill="none" stroke="#15122c" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M500 582 C 530 618 560 646 600 642 C 630 640 660 628 684 614" stroke-width="30" />
-    <path d="M408 586 C 378 610 358 640 364 664 C 374 690 440 700 500 686" stroke-width="32" />
-  </g>
-  <ellipse cx="690" cy="610" rx="20" ry="17" fill="#15122c" />
-
-  <!-- 音符(月の前にシルエットで) -->
-  <g fill="#15122c">
-    <ellipse cx="660" cy="352" rx="17" ry="12.5" transform="rotate(-20 660 352)" />
-    <ellipse cx="718" cy="336" rx="17" ry="12.5" transform="rotate(-20 718 336)" />
-    <rect x="670" y="268" width="8" height="84" />
-    <rect x="728" y="252" width="8" height="84" />
-    <path d="M670 266 L 736 248 L 736 268 L 670 286 Z" />
-  </g>
+  <!-- 紙の質感 -->
+  <rect width="1024" height="1024" filter="url(#grain)" opacity="0.06" style="mix-blend-mode:overlay" />
 </svg>
