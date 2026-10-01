@@ -8,14 +8,15 @@ const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- ギター(横向き)
 // 上が1弦・下が6弦、左端がナット。開放弦○とミュート×はナットの左に置く(U-FRET などと同じ向き)
+// 見た目は U-FRET に寄せて簡素に: 線は画面上でいつも1pxの細さ、ナットはまっすぐな太線、点は塗りの丸、セーハは細い棒
 
 export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120, fingers = true, compact = false }) {
   if (!voicing) return html`<div className="gd-none" style=${{ width }}>図なし</div>`;
   const v = voicing;
   const W = 100;
-  const H = compact ? 72 : 74;
-  const left = compact ? 15 : 14;
-  const right = 3;
+  const H = compact ? 80 : 78;
+  const left = compact ? 14 : 13;
+  const right = 2;
   const top = 5;
   const bottom = compact ? 11 : 12;
   const cols = compact ? 4 : 5;
@@ -24,27 +25,32 @@ export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120,
   const start = v.maxF <= cols ? 1 : v.minF;
   const yOf = (s) => top + (5 - s) * gap; // s: 0=6弦 … 5=1弦
   const xOf = (f) => left + (f - start + 0.5) * fretW;
-  const r = compact ? 4.6 : 4.1;
+  const r = gap * (compact ? 0.37 : 0.34);
   const parts = [];
   for (let k = 0; k <= cols; k++) {
     const x = left + k * fretW;
-    parts.push(html`<line key=${'f' + k} x1=${x} x2=${x} y1=${yOf(5)} y2=${yOf(0)} className=${k === 0 && start === 1 ? 'gd-nut' : 'gd-fret'} />`);
+    if (k === 0 && start === 1)
+      parts.push(html`<rect key="nut" x=${x - 4} y=${yOf(5) - 0.5} width="4.6" height=${yOf(0) - yOf(5) + 1} className="gd-nut" />`);
+    else parts.push(html`<line key=${'f' + k} x1=${x} x2=${x} y1=${yOf(5)} y2=${yOf(0)} className="gd-fret" vectorEffect="non-scaling-stroke" />`);
   }
-  for (let s = 0; s < 6; s++) parts.push(html`<line key=${'s' + s} x1=${left} x2=${W - right} y1=${yOf(s)} y2=${yOf(s)} className="gd-string" />`);
+  for (let s = 0; s < 6; s++)
+    parts.push(html`<line key=${'s' + s} x1=${left} x2=${W - right} y1=${yOf(s)} y2=${yOf(s)} className="gd-string" vectorEffect="non-scaling-stroke" />`);
   if (start > 1)
-    parts.push(html`<text key="fr" x=${xOf(start)} y=${H - 1.5} className="gd-frlabel" textAnchor="middle">${start}</text>`);
+    parts.push(html`<text key="fr" x=${xOf(start)} y=${H - 1} className="gd-frlabel" textAnchor="middle">${start}</text>`);
   v.frets.forEach((f, s) => {
-    const x = left - (compact ? 7 : 6.5);
+    const x = left - (compact ? 9 : 8);
     const y = yOf(s);
-    const m = compact ? 3.2 : 2.8;
-    if (f === 0) parts.push(html`<circle key=${'o' + s} cx=${x} cy=${y} r=${m} className="gd-open" />`);
-    else if (f < 0) parts.push(html`<path key=${'x' + s} d=${`M${x - m} ${y - m}L${x + m} ${y + m}M${x + m} ${y - m}L${x - m} ${y + m}`} className="gd-mute" />`);
+    const m = gap * 0.27;
+    if (f === 0) parts.push(html`<circle key=${'o' + s} cx=${x} cy=${y} r=${m} className="gd-open" vectorEffect="non-scaling-stroke" />`);
+    else if (f < 0)
+      parts.push(html`<path key=${'x' + s} d=${`M${x - m} ${y - m}L${x + m} ${y + m}M${x + m} ${y - m}L${x - m} ${y + m}`} className="gd-mute" vectorEffect="non-scaling-stroke" />`);
   });
   if (v.barre) {
     const x = xOf(v.barre.fret);
     const y1 = yOf(v.barre.to);
     const y2 = yOf(v.barre.from);
-    parts.push(html`<rect key="barre" x=${x - r} y=${y1 - r} width=${r * 2} height=${y2 - y1 + r * 2} rx=${r} className="gd-dot" />`);
+    const bw = r * 1.6;
+    parts.push(html`<rect key="barre" x=${x - bw / 2} y=${y1 - r * 0.9} width=${bw} height=${y2 - y1 + r * 1.8} rx=${bw / 2} className="gd-dot" />`);
   }
   v.frets.forEach((f, s) => {
     if (f <= 0) return;

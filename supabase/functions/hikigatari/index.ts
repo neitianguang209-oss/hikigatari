@@ -273,6 +273,19 @@ async function utanetArtistSongs(unId: string): Promise<Hit[]> {
   return out;
 }
 
+// 歌詞だけ(耳コピの下書きに当てはめる用。時刻は無い)。曲名で探してアーティストが合うものを開く
+async function utanetLyrics(title: string, artist: string) {
+  const hits = (await utanetSearch(baseTitle(title))).filter(
+    (h) => fold(baseTitle(h.title)) === fold(baseTitle(title)) && (!artist || sameArtist(h.artist, artist)),
+  );
+  if (!hits.length) return null;
+  const html = await get(`https://www.uta-net.com/song/${hits[0].id}/`);
+  const m = html.match(/id="kashi_area"[^>]*>([\s\S]*?)<\/div>/);
+  if (!m) return null;
+  const lines = m[1].split(/<br\s*\/?>/i).map((l) => stripTags(l).replace(/[\r\n\t]/g, '').trim());
+  return { lines, url: `https://www.uta-net.com/song/${hits[0].id}/` };
+}
+
 async function utanetSheet(id: string) {
   if (!/^\d+$/.test(id)) throw new HttpError(400, 'bad id');
   const html = await get(`https://www.uta-net.com/chord/${id}/`);
@@ -814,11 +827,24 @@ async function newDevice(name: string) {
 
 // ---------------------------------------------------------------- ライブラリ同期
 
+// 譜面からコードと小節線だけを残す(耳コピの下書きに当てはめた歌詞をバックアップに載せないため)
+function chordsOnly(text: string) {
+  return String(text || '')
+    .split('\n')
+    .map((l) => {
+      const t = l.trim();
+      if (!t || t.startsWith('{')) return l;
+      return (t.match(/\[[^\]]*\]|\|/g) ?? []).join(' ');
+    })
+    .join('\n');
+}
+
 // deno-lint-ignore no-explicit-any
 function backupShape(d: any) {
-  // バックアップ(anonから読める app_backups)には取り込んだ歌詞を載せない。自分で入力した譜面・耳コピの下書き(歌詞なし)だけ残す。
+  // バックアップ(anonから読める app_backups)には取り込んだ歌詞を載せない。自分で入力した譜面と、耳コピの下書きのコード(歌詞は外す)だけ残す。
   const { sheet, ...rest } = d ?? {};
-  if (sheet && (d.source === 'manual' || d.source === 'ear')) return { ...rest, sheet };
+  if (sheet && d.source === 'manual') return { ...rest, sheet };
+  if (sheet && d.source === 'ear') return { ...rest, sheet: { ...sheet, text: chordsOnly(sheet.text) } };
   return { ...rest, sheet: sheet ? { key: sheet.key, bpm: sheet.bpm, beatsPerBar: sheet.beatsPerBar } : null };
 }
 
@@ -936,6 +962,8 @@ Deno.serve(async (req) => {
         return json(await search(String(body.q || '')));
       case 'artist':
         return json(await artistSongs(String(body.name || ''), String(body.unId || '')));
+      case 'lyrics':
+        return json((await utanetLyrics(String(body.title || ''), String(body.artist || ''))) ?? { lines: [] });
       case 'sheet': {
         const s = await getSheet(String(body.source), String(body.id), String(body.title || ''), String(body.artist || ''), !!body.force);
         return json(s);

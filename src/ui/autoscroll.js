@@ -76,12 +76,29 @@ export function chordOnsets(line, beats, bpb) {
   if (!n || !beats) return [];
   if (n > beats) return idx.map((_, q) => (q * beats) / n);
   if (line.bars) {
+    const nb = Math.max(1, Math.round(beats / bpb));
+    // コードの無い小節も数えて、各コードが何小節目かを出す(数が行の小節数と合うときだけ使う)
+    const barOf = [];
+    let bar = 0;
+    segs.forEach((s, j) => {
+      if (s.bar && j > 0) bar++;
+      barOf.push(bar);
+    });
+    if (bar + 1 === nb) {
+      const out = new Array(n);
+      const byBar = new Map();
+      idx.forEach((j, q) => {
+        if (!byBar.has(barOf[j])) byBar.set(barOf[j], []);
+        byBar.get(barOf[j]).push(q);
+      });
+      for (const [b, g] of byBar) g.forEach((q, m) => (out[q] = b * bpb + Math.round((m * bpb) / g.length)));
+      return out;
+    }
     const groups = [];
     idx.forEach((j, q) => {
       if (q === 0 || segs[j].bar) groups.push([]);
       groups[groups.length - 1].push(q);
     });
-    const nb = Math.max(1, Math.round(beats / bpb));
     const out = new Array(n);
     groups.forEach((g, gi) => {
       const bar = groups.length === nb ? gi : Math.floor((gi * nb) / groups.length);

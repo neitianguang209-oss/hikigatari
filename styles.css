@@ -27,7 +27,7 @@
   --shadow-lg: 0 10px 40px rgba(30, 20, 10, 0.18);
   --radius: 14px;
   --font: system-ui, -apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic UI', Meiryo, sans-serif;
-  --chord-font: 'Roboto Condensed', 'Avenir Next Condensed', 'Arial Narrow', var(--font);
+  --chord-font: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Segoe UI', Roboto, Arial, var(--font);
   color-scheme: light;
 }
 
@@ -1054,17 +1054,20 @@ textarea {
   flex: none;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 6px 6px 4px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px 6px 4px 4px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   color: var(--text);
 }
+.chord-card:active {
+  background: var(--surface-2);
+}
 .chord-card-name {
-  font: 700 0.95rem/1.1 var(--chord-font);
+  font: 600 0.95rem/1.1 var(--chord-font);
   color: var(--chord);
 }
 .chip-strip {
@@ -1217,7 +1220,7 @@ textarea {
   background: var(--accent-soft);
 }
 .chord-name {
-  font: 700 0.95em/1.2 var(--chord-font);
+  font: 600 0.95em/1.2 var(--chord-font);
   color: var(--chord);
   letter-spacing: 0.01em;
 }
@@ -1263,7 +1266,7 @@ textarea {
   text-align: center;
 }
 
-/* 図 */
+/* 図(U-FRET のように簡素に: 線は1px・はっきり、ナットはまっすぐな太線、点は塗りの丸) */
 .gdiagram {
   display: block;
   overflow: visible;
@@ -1271,50 +1274,35 @@ textarea {
 .gd-fret,
 .gd-string {
   stroke: var(--diagram);
-  stroke-width: 1;
-  opacity: 0.55;
+  stroke-width: 1px;
+  shape-rendering: crispEdges;
 }
 .gd-nut {
-  stroke: var(--diagram);
-  stroke-width: 4;
-  stroke-linecap: round;
+  fill: var(--diagram);
 }
 .gd-dot {
   fill: var(--chord);
 }
 .gd-finger {
   fill: var(--on-accent);
-  font: 700 7.4px var(--chord-font);
+  font: 700 7px var(--font);
 }
 .gd-open {
   fill: none;
   stroke: var(--diagram);
-  stroke-width: 1.3;
+  stroke-width: 1px;
 }
 .gd-mute {
-  stroke: var(--muted);
-  stroke-width: 1.5;
-  stroke-linecap: round;
+  stroke: var(--diagram);
+  stroke-width: 1px;
+  stroke-linecap: square;
 }
 .gd-frlabel {
   fill: var(--muted);
-  font: 700 9px var(--chord-font);
-}
-.gdiagram.is-compact .gd-fret,
-.gdiagram.is-compact .gd-string {
-  stroke-width: 1.4;
-}
-.gdiagram.is-compact .gd-nut {
-  stroke-width: 5;
+  font: 600 9px var(--font);
 }
 .gdiagram.is-compact .gd-frlabel {
-  font-size: 12px;
-}
-.gdiagram.is-compact .gd-open {
-  stroke-width: 1.8;
-}
-.gdiagram.is-compact .gd-mute {
-  stroke-width: 2;
+  font-size: 11px;
 }
 .gd-none {
   font-size: 0.7rem;
@@ -1864,7 +1852,7 @@ code {
 }
 .welcome-logo {
   display: inline-block;
-  filter: drop-shadow(0 8px 20px color-mix(in srgb, var(--accent) 35%, transparent));
+  filter: drop-shadow(0 8px 22px rgba(40, 30, 100, 0.35));
 }
 .welcome-logo .logo-mark {
   border-radius: 16px;
@@ -3537,4 +3525,154 @@ body:has(.rec-dock) .toast-host {
   :root:not([data-theme='light']) .icon-btn.apple-btn {
     color: #ff6b81;
   }
+}
+
+/* ---------------------------------------------------------------- 耳コピ: 1曲まるごと・歌詞の当てはめ */
+
+.ear-lyrics-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 2px 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+.ear-lyrics-status .icon {
+  flex: none;
+  margin-top: 3px;
+}
+.ear-lyrics-status.is-found {
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+  color: var(--text);
+}
+.ear-lyrics-status.is-found .icon {
+  color: var(--good);
+}
+.ear-lyrics-status small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ear-source.is-quick {
+  padding: 10px 14px;
+}
+.ear-source.is-quick .ear-source-icon {
+  width: 34px;
+  height: 34px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.ear-rec-song {
+  height: 4px;
+  margin: 2px auto 10px;
+  max-width: 280px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.ear-rec-song i {
+  display: block;
+  height: 100%;
+  background: var(--good);
+  transform-origin: left;
+  transition: transform 0.25s linear;
+}
+.btn.ear-tap-first {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  height: auto;
+  padding: 10px 14px;
+  margin: 6px 0 4px;
+  white-space: normal;
+  line-height: 1.5;
+}
+.ear-tap-first small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+.ear-live-line {
+  margin: 8px 0;
+  font-weight: 700;
+  font-size: 1.02rem;
+  color: var(--accent-strong);
+}
+.ear-play-row {
+  align-items: center;
+  margin-bottom: 12px;
+}
+.ear-play-row .ear-play {
+  margin-bottom: 0;
+}
+.ear-shift {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ear-shift b {
+  min-width: 3.6em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+.ear-tap-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+}
+.ear-tap-intro p {
+  margin: 0;
+  flex: 1 1 220px;
+}
+.ear-tapper {
+  margin: 0 0 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  text-align: center;
+}
+.ear-tapper p {
+  margin: 0 0 8px;
+}
+.ear-tap-next {
+  font-weight: 800;
+  font-size: 1.15rem;
+  min-height: 1.6em;
+}
+.btn.ear-tap-btn {
+  min-width: 9em;
+}
+.ear-sheet {
+  max-height: 62vh;
+  overflow-y: auto;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: calc(var(--base-fs, 17px) * 0.92);
+}
+.ear-sheet .ln {
+  flex-wrap: wrap;
+  margin: 0 -6px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.ear-sheet .ln .ly {
+  white-space: pre-wrap;
+}
+.ear-sheet .ln-label {
+  cursor: default;
 }

@@ -97,12 +97,7 @@ export function PianoIcon({ size = 18 }) {
   </svg>`;
 }
 
+// アプリのアイコン(icons/icon.svg から作った絵)をそのまま小さく
 export function Logo({ size = 30 }) {
-  return html`<svg width=${size} height=${size} viewBox="0 0 64 64" aria-hidden="true" className="logo-mark">
-    <rect width="64" height="64" rx="16" fill="var(--accent)" />
-    <path d="M32 13c9.5 0 17 4.8 17 11.5 0 8.6-9.6 22.4-14.3 27.1a3.8 3.8 0 0 1-5.4 0C24.6 46.9 15 33.1 15 24.5 15 17.8 22.5 13 32 13z" fill="var(--on-accent)" />
-    <path d="M27 23v13.2M27 23l10-2.2v12.4" stroke="var(--accent)" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    <circle cx="24.4" cy="36.6" r="3.2" fill="var(--accent)" />
-    <circle cx="34.4" cy="33.4" r="3.2" fill="var(--accent)" />
-  </svg>`;
+  return html`<img src="icons/icon-192.png" width=${size} height=${size} alt="" aria-hidden="true" className="logo-mark" />`;
 }
