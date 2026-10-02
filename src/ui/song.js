@@ -4,7 +4,7 @@ import htm from 'htm';
 import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
-import { useAutoScroll } from './autoscroll.js';
+import { useAutoScroll, glideTo, glideHeading } from './autoscroll.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
@@ -493,6 +493,12 @@ function SongReady({ song, reload }) {
     };
   }, []);
 
+  // 止まっているときの画面送り: 画面の6割ぶんを、なめらかに少しずつ(続けて押したら、前の行き先からさらに先へ)
+  const pageTurn = (dir) => {
+    const el = scrollRef.current;
+    if (el) glideTo(el, glideHeading(el) + dir * el.clientHeight * 0.6);
+  };
+
   // キーボード・フットペダル(PageDown/PageUp/矢印)
   useEffect(() => {
     const onKey = (e) => {
@@ -503,11 +509,11 @@ function SongReady({ song, reload }) {
       } else if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'j') {
         e.preventDefault();
         if (scroll.playing) scroll.step(1);
-        else scrollRef.current?.scrollBy({ top: scrollRef.current.clientHeight * 0.6, behavior: 'smooth' });
+        else pageTurn(1);
       } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
         e.preventDefault();
         if (scroll.playing) scroll.step(-1);
-        else scrollRef.current?.scrollBy({ top: -scrollRef.current.clientHeight * 0.6, behavior: 'smooth' });
+        else pageTurn(-1);
       } else if (e.key === 'ArrowRight' || e.key === '+' || e.key === 'ArrowLeft' || e.key === '-') {
         // 速さの微調整(2%ずつ)。BPM を変えても「曲の長さに合わせる」では速さが変わらないため、こちらを動かす
         const up = e.key === 'ArrowRight' || e.key === '+';
@@ -572,7 +578,7 @@ function SongReady({ song, reload }) {
     if (prefs.tapToTurn === false || loopSel || (recOn && scroll.playing)) return;
     if (e.target.closest('button, a, input, select, textarea, .seg, .ln-label, .song-head, .strip-top, .mod-mark, .ear-banner, .sheet-end')) return;
     if (scroll.playing) scroll.step(1);
-    else scrollRef.current?.scrollBy({ top: scrollRef.current.clientHeight * 0.6, behavior: 'smooth' });
+    else pageTurn(1);
   };
   // 見出し(サビ・Aメロ など)をタップ: 区間選び中ならその段落まるごとをくり返す / 演奏中ならそこへ飛ぶ
   const hasLabels = useMemo(() => parsed.lines.some((l) => l.type === 'label'), [parsed]);
@@ -588,7 +594,7 @@ function SongReady({ song, reload }) {
       else {
         const sc = scrollRef.current;
         const el = sc?.querySelector(`[data-i="${i}"]`);
-        if (el) sc.scrollTo({ top: sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 8, behavior: 'smooth' });
+        if (el) glideTo(sc, sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 8);
       }
     },
     [loopSel, scroll.playing, parsed],

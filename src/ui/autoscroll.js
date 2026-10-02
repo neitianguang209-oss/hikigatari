@@ -64,6 +64,47 @@ export function unlockAudio() {
   audioCtx();
 }
 
+// なめらかに動かす(ブラウザの smooth に頼らず、はじめと終わりをゆっくりに)。指で動かしたら止める
+const easeSine = (k) => -(Math.cos(Math.PI * k) - 1) / 2;
+let glideRaf = 0;
+let glideStop = null;
+let glideTarget = null; // 動いている途中なら、行き先の位置
+export function stopGlide() {
+  glideStop?.();
+}
+// 今の位置(動いている途中なら行き先)。続けてタップしたとき、前の行き先から次へ進むため
+export function glideHeading(el) {
+  return glideTarget ?? el?.scrollTop ?? 0;
+}
+export function glideTo(el, top, ms = null) {
+  if (!el) return;
+  glideStop?.();
+  const from = el.scrollTop;
+  const to = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, top));
+  const dist = Math.abs(to - from);
+  if (dist < 2) return;
+  const dur = ms ?? Math.min(1100, 450 + dist * 0.7); // 画面の6割(約350px)で0.7秒ほど
+  const t0 = performance.now();
+  glideTarget = to;
+  const stop = () => {
+    cancelAnimationFrame(glideRaf);
+    glideTarget = null;
+    el.removeEventListener('touchmove', stop);
+    el.removeEventListener('wheel', stop);
+    if (glideStop === stop) glideStop = null;
+  };
+  el.addEventListener('touchmove', stop, { passive: true }); // 指で動かしたら止める(タップだけなら続ける)
+  el.addEventListener('wheel', stop, { passive: true });
+  glideStop = stop;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur);
+    el.scrollTop = from + (to - from) * easeSine(k);
+    if (k < 1) glideRaf = requestAnimationFrame(step);
+    else stop();
+  };
+  glideRaf = requestAnimationFrame(step);
+}
+
 // clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
 // clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
 // speed: 自分で決める速さの微調整(1 = そのまま。クリック音も同じだけ速く・遅くなるので、ずれない)
@@ -175,6 +216,12 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const setScroll = (y) => {
     const el = scrollRef.current;
     if (!el) return;
+    // 行へ飛んだ直後は、元の位置から新しい位置へなめらかに寄せていく
+    if (s.glide) {
+      const k = Math.min(1, (performance.now() - s.glide.t0) / s.glide.ms);
+      y = s.glide.from + (y - s.glide.from) * easeSine(k);
+      if (k >= 1) s.glide = null;
+    }
     const max = el.scrollHeight - el.clientHeight;
     const v = Math.max(0, Math.min(max, y));
     s.expect = v;
@@ -358,7 +405,12 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     unlockAudio();
     measure();
     // いま読んでいる行の頭(= 小節の頭)から始める。拍の途中から始めると、クリックとコードの切り替わりがずれるため
-    let b = fromBeat != null ? fromBeat : lineStartAt(beatFromScroll());
+    // (なめらかに動いている途中なら、行き先の位置で決める)
+    const heading = glideTarget;
+    stopGlide();
+    let b = fromBeat != null ? fromBeat : lineStartAt(heading != null ? (heading < 4 ? 0 : beatAtPos(heading + anchor())) : beatFromScroll());
+    // 始めるときも、今の位置からなめらかに寄せる
+    s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 500 };
     // 区間リピート中は、区間の外から始めたら区間の頭から
     if (s.loop) {
       const a = s.tl.starts[s.loop.from];
@@ -415,7 +467,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     stop();
     live.current.clock?.seekTime(0);
     const el = scrollRef.current;
-    if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+    glideTo(el, 0);
     setProgress(0);
   };
 
@@ -427,12 +479,13 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       if (s.playingFlag) clockSeek(b);
       else {
         clockSeek(b);
-        const el = scrollRef.current;
-        if (el) el.scrollTo({ top: Math.max(0, (s.tops[i] ?? 0) - anchor()), behavior: 'smooth' });
+        glideTo(scrollRef.current, (s.tops[i] ?? 0) - anchor());
       }
       return;
     }
     if (s.playingFlag) {
+      // 流しているときは、新しい位置まで0.6秒かけてなめらかに追いつく(一瞬で飛ばない)
+      s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
       s.countEnd = null;
       setCountdown(0);
       s.holding = false;
@@ -440,10 +493,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       setBeat(b, 0.03);
       s.sched = b - 1;
       tickClicks();
-    } else {
-      const el = scrollRef.current;
-      if (el) el.scrollTo({ top: Math.max(0, (s.tops[i] ?? 0) - anchor()), behavior: 'smooth' });
-    }
+    } else glideTo(scrollRef.current, (s.tops[i] ?? 0) - anchor());
   };
 
   const step = (dir) => {
@@ -465,6 +515,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       // 指で動かしている間は、拍の時計を止めておく
       if (!s.holding && !live.current.clock) s.frozenBeat = beatNow();
       s.holding = true;
+      s.glide = null;
       clearTimeout(s.idle);
       s.idle = setTimeout(() => {
         measure();
