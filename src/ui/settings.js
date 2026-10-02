@@ -83,6 +83,8 @@ export function Settings() {
       <${Switch} label="スタート前に1小節カウント" checked=${p.countIn} onChange=${(v) => set({ countIn: v })} />
       <${Switch} label="クリック音（メトロノーム）" hint="曲ごとにも切り替えられます" checked=${p.click} onChange=${(v) => set({ click: v })} />
       <${Switch} label="小節線を表示" checked=${p.showBars} onChange=${(v) => set({ showBars: v })} />
+      <${Switch} label="今の行に色を付ける" hint="自動スクロール中、今の行を黄色くします" checked=${p.showCurrent !== false} onChange=${(v) => set({ showCurrent: v })} />
+      <${Switch} label="何も無いところを押して画面を送る" hint="譜面の空いたところ（歌詞の右など）を押すと下へ送ります。流しているときは次の行へ。歌詞を押すとその行へ移ります" checked=${p.tapToTurn !== false} onChange=${(v) => set({ tapToTurn: v })} />
     </${Section}>
 
     <${Section} title="表示">

@@ -3842,3 +3842,41 @@ body:has(.rec-dock) .toast-host {
 .al-nav .btn-sm {
   flex: none;
 }
+
+/* 自動スクロール: 今の行の色を付けない設定 */
+.no-current .ln.is-current {
+  background: none;
+  box-shadow: none;
+}
+.no-current .ln.is-chorus.is-current::before {
+  display: block;
+}
+
+/* テンポ: スクロールの速さの微調整 */
+.speed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.speed-row .range {
+  flex: 1;
+  min-width: 60px;
+}
+.speed-row .btn {
+  flex: none;
+  min-width: 40px;
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+.speed-now {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.speed-now.is-on {
+  color: var(--accent-strong);
+}
+.tempo-unit.is-speed {
+  color: var(--accent-strong);
+  font-weight: 800;
+}

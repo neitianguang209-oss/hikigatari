@@ -19,6 +19,8 @@ export const DEFAULT_PREFS = {
   click: false,
   clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
+  showCurrent: true, // 流しているあいだ、今の行に色を付ける
+  tapToTurn: true, // 譜面の何も無いところを押すと、画面を下へ送る
   appleCardDismissed: false,
   homeSort: 'recent', // recent | added | title
 };

@@ -66,7 +66,8 @@ export function unlockAudio() {
 
 // clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
 // clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
-export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1 }) {
+// speed: 自分で決める速さの微調整(1 = そのまま。クリック音も同じだけ速く・遅くなるので、ずれない)
+export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1, speed = 1 }) {
   const [playing, setPlaying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -93,7 +94,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   // 曲の長さに合わせる: 譜面の拍を進める速さだけを変える(クリック音は本来のBPMのまま)
   const fit = useMemo(() => songFit(tl.total, bpm, durationMs), [tl.total, bpm, durationMs]);
   const scrollRate = fitSong && fit && fit.usable ? 1 / fit.ratio : 1;
-  live.current = { bpm, click, countIn, beatsPerBar, scrollRate, clock, clickVolume };
+  live.current = { bpm, click, countIn, beatsPerBar, scrollRate, clock, clickVolume, speed };
   const clockBeat = () => {
     const c = live.current.clock;
     return beatAtTime(c.time(), c.anchors, s.tl.starts, c.bps);
@@ -266,11 +267,11 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   // 拍 = anchorBeat + (音の時刻 - anchorTime) × 1秒あたりの拍数。基準は音の時計(audioCtx().currentTime)なので、
   // 画面の書きかえが遅れても、クリックの鳴る瞬間とコードの切り替わりはずれない
   const nowT = () => audioCtx().currentTime;
-  // その拍での速さ: カウント中とクリック音オンのときは BPM どおり、それ以外は曲の長さに合わせた速さ
+  // その拍での速さ: カウント中とクリック音オンのときは BPM どおり、それ以外は曲の長さに合わせた速さ。そこに自分の微調整をかける
   const wantBps = (at) => {
-    const { bpm: B, click: C, scrollRate } = live.current;
+    const { bpm: B, click: C, scrollRate, speed: S } = live.current;
     const counting = s.countEnd != null && at < s.countEnd;
-    return (B / 60) * (counting || C ? 1 : scrollRate);
+    return (B / 60) * (counting || C ? 1 : scrollRate) * (S || 1);
   };
   const beatNow = () => (s.holding ? s.frozenBeat : s.anchorBeat + (nowT() - s.anchorTime) * s.bps);
   const setBeat = (b, lead = 0) => {
