@@ -2170,40 +2170,6 @@ code {
   border: 0;
 }
 
-.beat-dots {
-  position: absolute;
-  top: -15px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 6px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  opacity: 0;
-  transition: opacity 0.2s;
-  pointer-events: none;
-}
-.beat-dots.is-playing {
-  opacity: 1;
-}
-.beat-dots i {
-  display: block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--surface-3);
-  transition: transform 0.08s, background 0.08s;
-}
-.beat-dots i.on {
-  background: var(--accent);
-  transform: scale(1.35);
-}
-.beat-dots i:first-child.on {
-  transform: scale(1.7);
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

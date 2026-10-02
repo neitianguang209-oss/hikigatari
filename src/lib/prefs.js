@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 
 const KEY = 'hk.prefs';
-const PREFS_VERSION = 3;
+const PREFS_VERSION = 4;
 
 export const DEFAULT_PREFS = {
   instrument: 'guitar', // guitar | piano
@@ -19,7 +19,7 @@ export const DEFAULT_PREFS = {
   click: false,
   clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
-  showCurrent: true, // 流しているあいだ、今の行に色を付ける
+  showCurrent: false, // 流しているあいだ、今の行に色を付ける(標準はオフ。BPM の時計と実際の歌がずれて見えるため)
   tapToTurn: true, // 譜面の何も無いところを押すと、画面を下へ送る
   appleCardDismissed: false,
   homeSort: 'recent', // recent | added | title
@@ -36,6 +36,8 @@ function load() {
     if (!saved.v || saved.v < 2) delete saved.barsPerLine;
     // v3: 「かんたんコード」(標準オン)を「かんたんモード」(標準オフ)に作り替えたので、古い値は捨てる
     delete saved.simple;
+    // v4: 「今の行に色を付ける」の標準をオフにしたので、古い保存値は捨てる
+    if (!saved.v || saved.v < 4) delete saved.showCurrent;
     return { ...DEFAULT_PREFS, ...saved, v: PREFS_VERSION };
   } catch {
     return { ...DEFAULT_PREFS, v: PREFS_VERSION };

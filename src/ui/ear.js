@@ -500,6 +500,15 @@ export function EarCopy({ params }) {
     toast(`歌詞を${ly.source}から読み込みました（${ly.plain.filter(Boolean).length}行）`);
   };
 
+  // 拍子を選び直す(コードの聴き取りはそのまま、小節の区切りだけやり直す)。合わせたコードの位置は小節が変わるので最初から
+  const changeMeter = (m) => {
+    if (!result?.r.rebar || m === result.r.beatsPerBar) return;
+    stopPlay();
+    setPlace({});
+    setChecked(new Set());
+    setResult((prev) => ({ ...prev, r: { ...prev.r, ...prev.r.rebar(m) } }));
+  };
+
   // ---------------------------------------------------------------- 保存
   const save = async (edit) => {
     const t = title.trim();
@@ -512,7 +521,7 @@ export function EarCopy({ params }) {
     const existing = lib.get(id);
     if (existing && !existing.deleted && existing.sheet && existing.source !== 'ear' && !confirm('この曲にはすでに譜面があります。耳コピの下書きに置き換えますか？')) return;
     const text = fit && fit.used ? fit.text : barsToSheet(result.r, { note: `耳コピの下書き（${result.source}・自動）` });
-    const sheet = { text, key: null, bpm: result.r.bpm, beatsPerBar: 4, fetchedAt: new Date().toISOString() };
+    const sheet = { text, key: null, bpm: result.r.bpm, beatsPerBar: result.r.beatsPerBar || 4, fetchedAt: new Date().toISOString() };
     const common = { source: 'ear', sourceId: null, sourceUrl: null, sourceLabel: '', sheet, edited: false, watch: true, watchCheckedAt: Date.now(), watchFound: null };
     if (existing && !existing.deleted) await lib.patch(id, common);
     else
@@ -640,6 +649,13 @@ export function EarCopy({ params }) {
       ? html`<section className="ear-result">
           <div className="ear-summary">
             <b>Key ${keyName(result.r.key)}</b><span>♩=${result.r.bpm}</span><span>${result.r.bars.length}小節</span>
+            <${Segmented}
+              size="sm"
+              label="拍子"
+              value=${result.r.beatsPerBar || 4}
+              onChange=${changeMeter}
+              options=${[4, 3].map((m) => ({ value: m, label: `${m}拍子${m === result.r.detectedMeter ? '（自動）' : ''}` }))}
+            />
             <em className=${cx('ear-sure', sureCls)}>${sure}</em>
           </div>
 

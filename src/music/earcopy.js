@@ -479,45 +479,83 @@ export async function analyzeAudio(samples, { progress = () => {}, keyWeight = 0
   const key = keyFromPath(p1, feats, keyWeight);
   const sc = scoreBeats(feats, key.T);
   const p2 = viterbi(sc, flat(0.12));
-  // コードの変わり目が一番そろう位置を「小節の頭」とする(4拍子)
-  const hits = [0, 0, 0, 0];
-  for (let i = 1; i < p2.length; i++) if (p2[i] !== p2[i - 1]) hits[i % 4]++;
-  const phase = hits.indexOf(Math.max(...hits));
-  const mult = [0.55, 1.6, 1.0, 1.6];
-  const path = viterbi(sc, (i) => 0.13 * mult[(((i - phase) % 4) + 4) % 4]);
+  // 拍子: コードの変わり目が「3拍ごと」と「4拍ごと」のどちらにそろっているか(そろい方 = いちばん多い位置の割合 × 拍数)
+  const changes = [];
+  for (let i = 1; i < p2.length; i++) if (p2[i] !== p2[i - 1]) changes.push(i);
+  const alignOf = (m) => {
+    const h = new Array(m).fill(0);
+    for (const i of changes) h[i % m]++;
+    const top = Math.max(...h);
+    return { phase: h.indexOf(top), score: changes.length ? (top / changes.length) * m : 0 };
+  };
+  const a3 = alignOf(3);
+  const a4 = alignOf(4);
+  // もう1つの手がかり: 拍ごとの「響きの変わり方」と「音の大きさ」が、3拍周期と4拍周期のどちらでくり返すか(自己相関)
+  const acf = (x, lag) => {
+    const n = x.length - lag;
+    if (n < 4) return 0;
+    const m = x.reduce((a, b) => a + b, 0) / x.length;
+    let num = 0;
+    let den = 0;
+    for (let i = 0; i < x.length; i++) den += (x[i] - m) ** 2;
+    for (let i = 0; i < n; i++) num += (x[i] - m) * (x[i + lag] - m);
+    return den ? num / n / (den / x.length) : 0;
+  };
+  const cosSim = (a, b) => {
+    let s = 0;
+    let na = 0;
+    let nb = 0;
+    for (let c = 0; c < 12; c++) {
+      s += a[c] * b[c];
+      na += a[c] * a[c];
+      nb += b[c] * b[c];
+    }
+    return na && nb ? s / Math.sqrt(na * nb) : 1;
+  };
+  const nov = feats.map((f, i) => (i ? 1 - cosSim(f.tr, feats[i - 1].tr) + 0.5 * (1 - cosSim(f.bs, feats[i - 1].bs)) : 0));
+  const en = feats.map((f) => f.e);
+  const r3 = acf(nov, 3) + acf(nov, 6) + acf(en, 3) + acf(en, 6);
+  const r4 = acf(nov, 4) + acf(nov, 8) + acf(en, 4) + acf(en, 8);
+  // 4拍子を3拍子と取り違えないよう、はっきりしたときだけ3拍子(ポップス18曲で取り違え0。6/8 のような曲は見分けきれないので手で選ぶ)
+  const detected = changes.length >= 8 && (r3 > r4 + 0.4 || (a3.score > a4.score * 1.15 && r3 > r4)) ? 3 : 4;
 
   const flatNames = keyPrefersFlat(key);
   const nameOf = (s) => (s >= TEMPLATES.length ? 'N.C.' : noteName(TEMPLATES[s].root, flatNames) + TYPES[TEMPLATES[s].type].suf);
 
-  // 小節にまとめる(前半・後半で別のコードなら2つ)
-  const bars = [];
-  const majority = (a, b) => (a === b ? a : a);
-  for (let s = phase; s + 3 < path.length; s += 4) {
-    const h1 = majority(path[s], path[s + 1]);
-    const h2 = path[s + 2] === path[s + 3] ? path[s + 2] : path[s + 2];
-    const chords = h1 === h2 ? [nameOf(h1)] : [nameOf(h1), nameOf(h2)];
-    bars.push({ t0: beats[s], t1: beats[Math.min(s + 4, beats.length - 1)], chords });
-  }
-  // 自信度: 選んだコードの点数が、2番目の候補よりどれだけ高いか
-  let margin = 0;
-  let cnt = 0;
-  path.forEach((s, i) => {
-    if (s >= TEMPLATES.length) return;
-    const row = sc[i];
-    let second = -Infinity;
-    for (let k = 0; k < TEMPLATES.length; k++) if (k !== s && row[k] > second && TEMPLATES[k].root !== TEMPLATES[s].root) second = row[k];
-    margin += row[s] - second;
-    cnt++;
-  });
-  const confidence = cnt ? margin / cnt : 0;
+  // 小節にまとめる: 変わり目がいちばんそろう位置を小節の頭に。1小節に2つまで(4拍子は3拍目、3拍子は3拍目で変わるとき)
+  const rebar = (m) => {
+    const phase = (m === 3 ? a3 : alignOf(m)).phase;
+    const mult = m === 3 ? [0.55, 1.6, 1.6] : [0.55, 1.6, 1.0, 1.6];
+    const path = viterbi(sc, (i) => 0.13 * mult[(((i - phase) % m) + m) % m]);
+    const bars = [];
+    for (let s = phase; s + m - 1 < path.length; s += m) {
+      const h1 = path[s];
+      const h2 = path[s + 2];
+      const chords = h1 === h2 ? [nameOf(h1)] : [nameOf(h1), nameOf(h2)];
+      bars.push({ t0: beats[s], t1: beats[Math.min(s + m, beats.length - 1)], mid: beats[s + 2], chords });
+    }
+    // 自信度: 選んだコードの点数が、2番目の候補よりどれだけ高いか
+    let margin = 0;
+    let cnt = 0;
+    path.forEach((s, i) => {
+      if (s >= TEMPLATES.length) return;
+      const row = sc[i];
+      let second = -Infinity;
+      for (let k = 0; k < TEMPLATES.length; k++) if (k !== s && row[k] > second && TEMPLATES[k].root !== TEMPLATES[s].root) second = row[k];
+      margin += row[s] - second;
+      cnt++;
+    });
+    return { bars, beatsPerBar: m, confidence: cnt ? margin / cnt : 0 };
+  };
   progress(1, 'できました');
-  return { key, bpm: Math.round(bpm), beats, bars, confidence };
+  return { key, bpm: Math.round(bpm), beats, ...rebar(detected), detectedMeter: detected, rebar };
 }
 
 // 小節の並び → 譜面テキスト(4小節で1行。自動スクロールが曲の長さどおりに進むよう、くり返しもそのまま書く)
-export function barsToSheet({ key, bpm, bars }, { note = '' } = {}) {
+export function barsToSheet({ key, bpm, bars, beatsPerBar = 4 }, { note = '' } = {}) {
   const keyName = noteName(key.pc, keyPrefersFlat(key)) + (key.minor ? 'm' : '');
   const lines = [`{key:${keyName}}`, `{tempo:${bpm}}`];
+  if (beatsPerBar !== 4) lines.push(`{time:${beatsPerBar}/4}`);
   if (note) lines.push(`{c:${note}}`);
   const rows = [];
   for (let i = 0; i < bars.length; i += 4) {

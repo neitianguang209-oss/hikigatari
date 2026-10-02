@@ -98,6 +98,7 @@ export function fitLyrics(r, lines, { note = '', weights = null, place = null } 
   const flat = keyPrefersFlat(r.key);
   const keyName = noteName(r.key.pc, flat) + (r.key.minor ? 'm' : '');
   const head = [`{key:${keyName}}`, `{tempo:${r.bpm}}`];
+  if (r.beatsPerBar && r.beatsPerBar !== 4) head.push(`{time:${r.beatsPerBar}/4}`);
   if (note) head.push(`{c:${note}}`);
   const rows = [];
   const done = (used) => {
@@ -106,11 +107,11 @@ export function fitLyrics(r, lines, { note = '', weights = null, place = null } 
   };
   if (!nb) return done(0);
 
-  // コードの切り替わり(小節の頭と、小節の後半)
+  // コードの切り替わり(小節の頭と、小節の途中=4拍子・3拍子とも3拍目)
   const events = [];
   for (const b of bars) {
     events.push({ t: b.t0, c: b.chords[0] });
-    if (b.chords[1]) events.push({ t: (b.t0 + b.t1) / 2, c: b.chords[1] });
+    if (b.chords[1]) events.push({ t: b.mid ?? (b.t0 + b.t1) / 2, c: b.chords[1] });
   }
   const barLen = median(bars.map((b) => b.t1 - b.t0)) || 2;
   const end = bars[nb - 1].t1;

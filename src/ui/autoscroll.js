@@ -113,7 +113,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
   const [loop, setLoopState] = useState(null); // 区間リピート { from, to }(行の番号)
-  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, beatEl: null, beatShown: -1, sched: 0 }).current;
+  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, sched: 0 }).current;
   const live = useRef({});
 
   const tl = useMemo(() => {
@@ -296,7 +296,6 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         setCountdown(0);
       }
     }
-    showBeat(((Math.floor(b + 1e-6) % bpb) + bpb) % bpb);
     if (!s.holding) setScroll(posAtBeat(eff) - anchor());
     highlight(eff);
     if (ts - s.lastProg > 250) {
@@ -368,19 +367,6 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     }
   };
 
-  // 拍の目印(再生バーの点)。React を通さず直接切り替える
-  const showBeat = (b) => {
-    const el = s.beatEl;
-    if (!el || b === s.beatShown) return;
-    el.children[s.beatShown]?.classList.remove('on');
-    el.children[b]?.classList.add('on');
-    s.beatShown = b;
-  };
-  const bindBeat = useCallback((el) => {
-    s.beatEl = el;
-    s.beatShown = -1;
-  }, []);
-
   const start = (fromBeat) => {
     if (!s.tl.timed.length) return;
     if (live.current.clock) {
@@ -443,8 +429,6 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     setCountdown(0);
     setPlaying(false);
     clearHighlight();
-    s.beatEl?.children[s.beatShown]?.classList.remove('on');
-    s.beatShown = -1;
   };
 
   // 区間リピートを決める/やめる(行の番号。範囲外や逆順も受け付ける)
@@ -574,5 +558,5 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     if (s.held) releasePlayback();
   }, []);
 
-  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop, bindBeat };
+  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop };
 }

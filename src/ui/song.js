@@ -314,7 +314,9 @@ function SongReady({ song, reload }) {
   const barsPerLine = st.barsPerLine ?? prefs.barsPerLine; // 0 = 自動で見積もる
   const fitSong = st.fitSong ?? true;
   const speed = st.speed ?? 1; // 自分で決めるスクロールの速さの微調整(曲ごと)
-  const beatsPerBar = song.sheet.beatsPerBar || parsed.meta.beatsPerBar || 4;
+  // 拍子: 譜面の {time:3/4} などから。曲ごとに選び直せる(メトロノームの強拍・カウント・1小節の長さが変わる)
+  const sheetBpb = parsed.meta.beatsPerBar || song.sheet.beatsPerBar || 4;
+  const beatsPerBar = st.beatsPerBar || sheetBpb;
 
   // ---- 自分の歌(動画・録音)に合わせる
   // rec: この端末に置いた録音 / recOn: 録音に合わせて流すか(曲ごとに覚える) / 行の時刻の目印は録音ごとに settings.recSync に
@@ -630,7 +632,7 @@ function SongReady({ song, reload }) {
   const capoLabel = instrument === 'guitar' ? (capo === 0 ? 'カポなし' : `カポ ${capo}`) : null;
   const flatForShape = keyPrefersFlat(shapeKey);
 
-  return html`<div className=${cx('song', 'is-' + instrument, inline && 'has-inline', prefs.showCurrent === false && 'no-current')}>
+  return html`<div className=${cx('song', 'is-' + instrument, inline && 'has-inline', !prefs.showCurrent && 'no-current')}>
     <${TopBar} song=${song} onMore=${() => setPanel('more')} onApple=${onApple} />
     <div className="song-controls" role="toolbar" aria-label="表示の設定">
       <${Segmented}
@@ -749,7 +751,6 @@ function SongReady({ song, reload }) {
       bpm=${bpm}
       bpmKnown=${bpmKnown}
       speed=${speed}
-      beatsPerBar=${beatsPerBar}
       click=${st.click ?? prefs.click}
       onClick=${() => {
         const on = !(st.click ?? prefs.click);
@@ -782,11 +783,13 @@ function SongReady({ song, reload }) {
       fitSong=${fitSong}
       durationMs=${song.durationMs}
       beatsPerBar=${beatsPerBar}
+      sheetBpb=${sheetBpb}
+      meter=${st.beatsPerBar || 0}
       clickVolume=${prefs.clickVolume ?? 1}
       setClickVolume=${(v) => setPrefs({ clickVolume: v })}
       clickOn=${!!(st.click ?? prefs.click)}
       speed=${speed}
-      showCurrent=${prefs.showCurrent !== false}
+      showCurrent=${!!prefs.showCurrent}
       setShowCurrent=${(v) => setPrefs({ showCurrent: v })}
     />
     <${TextPanel} open=${panel === 'text'} onClose=${() => setPanel(null)} fontScale=${fontScale} setSt=${setSt} />
@@ -1032,14 +1035,9 @@ function ChordStrip({ names, instrument, onTap, vertical = false, picks = null }
 // ---------------------------------------------------------------- 再生バー
 
 // rec: 自分の録音に合わせているとき(テンポの代わりに「録音」、メトロノームは出さない)
-function Transport({ scroll, bpm, bpmKnown, beatsPerBar, click, onClick, onTempo, looping, onLoop, rec = false, onRec, speed = 1 }) {
+function Transport({ scroll, bpm, bpmKnown, click, onClick, onTempo, looping, onLoop, rec = false, onRec, speed = 1 }) {
   return html`<div className=${cx('transport', rec && 'is-rec')}>
     ${rec ? null : html`<div className="transport-progress" style=${{ transform: `scaleX(${scroll.progress})` }}></div>`}
-    ${rec
-      ? null
-      : html`<div className=${cx('beat-dots', scroll.playing && 'is-playing')} ref=${scroll.bindBeat} aria-hidden="true">
-          ${Array.from({ length: Math.min(8, beatsPerBar || 4) }, (_, i) => html`<i key=${i}></i>`)}
-        </div>`}
     <button className="icon-btn" onClick=${scroll.toStart} aria-label="最初に戻る"><${Icon} name="skipBack" /></button>
     ${rec
       ? html`<button className="tempo-btn rec-btn" onClick=${onRec} aria-label="録音の設定">
@@ -1269,7 +1267,7 @@ function Metronome({ bpm, beatsPerBar = 4, volume, setVolume }) {
   </div>`;
 }
 
-function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, clickVolume = 1, setClickVolume, clickOn = false, speed = 1, showCurrent = true, setShowCurrent }) {
+function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, sheetBpb = 4, meter = 0, clickVolume = 1, setClickVolume, clickOn = false, speed = 1, showCurrent = true, setShowCurrent }) {
   const pct = Math.round(speed * 100);
   const setPct = (p) => setSt({ speed: Math.abs(p - 100) < 0.5 ? null : Math.max(70, Math.min(130, p)) / 100 });
   const taps = useRef([]);
@@ -1306,6 +1304,16 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
       <button className="btn" onClick=${() => setSt({ bpm: Math.min(300, bpm * 2) })}>×2</button>
     </div>
     ${custom && origBpm ? html`<div className="row-gap center"><button className="btn btn-ghost" onClick=${() => setSt({ bpm: null })}>元のテンポ（${origBpm}）に戻す</button></div>` : null}
+    <div className="panel-field">
+      <div className="panel-field-label">拍子</div>
+      <${Segmented}
+        label="拍子"
+        value=${meter}
+        onChange=${(v) => setSt({ beatsPerBar: v || null })}
+        options=${[{ value: 0, label: `自動（${sheetBpb}）` }, ...[2, 3, 4, 6].map((n) => ({ value: n, label: `${n}拍子` }))]}
+      />
+      <p className="panel-note">メトロノームの強い拍(1拍目)・スタート前のカウント・1小節の長さが変わります。ワルツなど3拍子の曲は「3拍子」に。</p>
+    </div>
     <${Metronome} bpm=${bpm} beatsPerBar=${beatsPerBar} volume=${clickVolume} setVolume=${setClickVolume} />
     <div className="panel-field">
       <${Switch} label="今の行に色を付ける" hint="流しているあいだ、今の行を黄色くします（すべての曲で共通）" checked=${showCurrent} onChange=${setShowCurrent} />
