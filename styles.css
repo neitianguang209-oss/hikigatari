@@ -28,6 +28,7 @@
   --radius: 14px;
   --font: system-ui, -apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic UI', Meiryo, sans-serif;
   --chord-font: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Segoe UI', Roboto, Arial, var(--font);
+  --lyric-font: 'Noto Sans JP', var(--font); /* 歌詞は少し太め(中くらいの太さ)で読みやすく */
   color-scheme: light;
 }
 
@@ -1229,6 +1230,8 @@ textarea {
   width: 0.3em;
 }
 .ly {
+  font-family: var(--lyric-font);
+  font-weight: 500;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
@@ -3366,21 +3369,6 @@ body:has(.rec-dock) .toast-host {
   font-size: 0.98rem;
 }
 
-/* 今弾くコード(クリックと同じ拍で切り替わる) */
-.chord.is-now .chord-name {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-radius: 6px;
-  padding: 0 0.22em;
-  margin: 0 -0.22em;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
-}
-.chord.is-now .mini-diagram {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: 4px;
-}
-
 /* ---------------------------------------------------------------- アーティスト(検索の候補・曲一覧) */
 
 .artist-hits {
@@ -3675,4 +3663,182 @@ body:has(.rec-dock) .toast-host {
 }
 .ear-sheet .ln-label {
   cursor: default;
+}
+
+/* ---------------------------------------------------------------- 耳コピ: コードの位置を耳で合わせる */
+
+.ear-lyrics-status .link-btn {
+  padding: 0 2px;
+  font-size: 0.8rem;
+  color: var(--accent-strong);
+}
+.ear-lyrics-input {
+  width: 100%;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+.ear-align-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+.ear-align-intro p {
+  margin: 0;
+  flex: 1 1 240px;
+  line-height: 1.6;
+}
+.ear-sheet .ln-lyric {
+  position: relative;
+  padding-right: 4.2em;
+}
+.ln-check {
+  position: absolute;
+  right: 6px;
+  bottom: 0.45em;
+  font-size: 0.68em;
+  font-weight: 700;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05em 0.6em;
+}
+.ln-check.is-on {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+}
+.al-help {
+  margin: 0 0 12px;
+  font-size: 0.84rem;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.al-help b {
+  color: var(--text);
+}
+.al-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 1px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.al-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 1.6em;
+  padding: 2px 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.al-cell:hover {
+  background: var(--surface);
+}
+.al-cell.is-singing .al-cell-ch {
+  color: var(--accent-strong);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.al-cell.is-end .al-cell-ch {
+  color: var(--muted);
+}
+.al-cell-chords {
+  display: flex;
+  gap: 2px;
+  min-height: 1.5em;
+}
+.al-cell-ch {
+  font-family: var(--lyric-font);
+  font-weight: 500;
+  font-size: 1.3rem;
+  line-height: 1.4;
+  padding: 0 1px;
+}
+.al-mark {
+  font: 600 0.88rem/1.4 var(--chord-font);
+  color: var(--chord);
+  padding: 0 4px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.al-mark.is-fixed {
+  box-shadow: inset 0 -2px 0 var(--good);
+}
+.al-mark.is-sel {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.al-mark.is-lit,
+.al-chip.is-lit {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.al-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0;
+}
+.al-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--chord);
+  font: 600 0.95rem var(--chord-font);
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.al-chip small {
+  color: var(--good);
+  font-size: 0.75rem;
+}
+.al-chip.is-sel {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.al-controls,
+.al-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.al-nav {
+  justify-content: space-between;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.al-nav {
+  flex-wrap: nowrap;
+}
+.al-nav .btn-primary {
+  flex: 1;
+  justify-content: center;
+}
+.al-nav .btn-sm {
+  flex: none;
 }

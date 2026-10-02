@@ -286,6 +286,103 @@ async function utanetLyrics(title: string, artist: string) {
   return { lines, url: `https://www.uta-net.com/song/${hits[0].id}/` };
 }
 
+// ---------------------------------------------------------------- 歌詞サイト(耳コピの下書きに当てはめる用)
+// 行は [{ t: 文字, r?: ふりがな }] の並び。ふりがなは UtaTen にだけある(歌う拍の数を数えるのに使う)
+
+type LyricSeg = { t: string; r?: string };
+
+function brLines(html: string) {
+  return html.split(/<br\s*\/?>/i).map((l) => stripTags(l).replace(/[\r\n\t]/g, '').trim());
+}
+
+function utatenParse(html: string): LyricSeg[][] | null {
+  const m = html.match(/<div class="hiragana"\s*>([\s\S]*?)<\/div>/);
+  if (!m) return null;
+  return m[1].split(/<br\s*\/?>/i).map((raw) => {
+    const segs: LyricSeg[] = [];
+    const re = /<span class="ruby"><span class="rb">([\s\S]*?)<\/span><span class="rt">([\s\S]*?)<\/span><\/span>/g;
+    let last = 0;
+    let mm: RegExpExecArray | null;
+    const text = (s: string) => stripTags(s).replace(/[\r\n\t]/g, '');
+    while ((mm = re.exec(raw))) {
+      const before = text(raw.slice(last, mm.index));
+      if (before) segs.push({ t: before });
+      segs.push({ t: text(mm[1]), r: text(mm[2]) });
+      last = re.lastIndex;
+    }
+    const tail = text(raw.slice(last));
+    if (tail) segs.push({ t: tail });
+    if (segs.length) {
+      segs[0].t = segs[0].t.replace(/^\s+/, '');
+      segs[segs.length - 1].t = segs[segs.length - 1].t.replace(/\s+$/, '');
+    }
+    return segs.filter((s) => s.t);
+  });
+}
+
+// UtaTen で曲名・アーティストから探す(漢字にふりがなが付いた歌詞)
+async function utatenLyrics(title: string, artist: string) {
+  const html = await get(
+    `https://utaten.com/search?title=${encodeURIComponent(baseTitle(title))}${artist ? `&artist_name=${encodeURIComponent(artist)}` : ''}`,
+  );
+  const re = /searchResult__title">\s*<a href="(\/lyric\/[^"]+)">([\s\S]*?)<\/a>[\s\S]*?searchResult__artist">[\s\S]*?<a [^>]*>([\s\S]*?)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    if (fold(baseTitle(stripTags(m[2]).trim())) !== fold(baseTitle(title))) continue;
+    if (artist && !sameArtist(stripTags(m[3]).trim(), artist)) continue;
+    const url = 'https://utaten.com' + m[1];
+    const lines = utatenParse(await get(url));
+    return lines ? { lines, url, source: 'UtaTen' } : null;
+  }
+  return null;
+}
+
+// 貼り付けられた歌詞ページの URL から歌詞を読む(知っているサイトだけ)
+const LYRIC_SITES: Record<string, string> = {
+  'uta-net.com': '歌ネット',
+  'utaten.com': 'UtaTen',
+  'j-lyric.net': 'J-Lyric',
+  'kget.jp': '歌詞GET',
+  'petitlyrics.com': 'プチリリ',
+  'lyrical-nonsense.com': 'Lyrical Nonsense',
+  'linkco.re': 'linkcore',
+};
+
+async function lyricsFromUrl(raw: string) {
+  let u: URL;
+  try {
+    u = new URL(String(raw || '').trim());
+  } catch {
+    throw new HttpError(400, 'URL の形になっていません');
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, '');
+  const site = Object.keys(LYRIC_SITES).find((h) => host === h || host.endsWith('.' + h));
+  if (!/^https?:$/.test(u.protocol) || !site) {
+    throw new HttpError(400, 'このサイトのリンクには対応していません。歌詞をコピーして、そのまま貼り付けてください');
+  }
+  const html = await get(u.toString());
+  const name = LYRIC_SITES[site];
+  if (site === 'utaten.com') {
+    const lines = utatenParse(html);
+    if (lines?.some((l) => l.length)) return { lines, source: name, url: u.toString() };
+  }
+  if (site === 'uta-net.com') {
+    const m = html.match(/id="kashi_area"[^>]*>([\s\S]*?)<\/div>/);
+    if (m) return { lines: brLines(m[1]).map((t) => (t ? [{ t }] : [])), source: name, url: u.toString() };
+  }
+  // それ以外: id か class に lyric / kashi を含む要素のうち、改行(<br>)のいちばん多いもの
+  const re = /<(div|p)[^>]*(?:id|class)="[^"]*(?:lyric|Lyric|LYRIC|kashi|kasi)[^"]*"[^>]*>([\s\S]*?)<\/\1>/g;
+  let best = '';
+  let bestN = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const n = (m[2].match(/<br\s*\/?>/gi) ?? []).length;
+    if (n > bestN) [best, bestN] = [m[2], n];
+  }
+  if (bestN < 3) throw new HttpError(404, 'このページから歌詞を読み取れませんでした。歌詞をコピーして、そのまま貼り付けてください');
+  return { lines: brLines(best).map((t) => (t ? [{ t }] : [])), source: name, url: u.toString() };
+}
+
 async function utanetSheet(id: string) {
   if (!/^\d+$/.test(id)) throw new HttpError(400, 'bad id');
   const html = await get(`https://www.uta-net.com/chord/${id}/`);
@@ -964,6 +1061,10 @@ Deno.serve(async (req) => {
         return json(await artistSongs(String(body.name || ''), String(body.unId || '')));
       case 'lyrics':
         return json((await utanetLyrics(String(body.title || ''), String(body.artist || ''))) ?? { lines: [] });
+      case 'lyrics_utaten':
+        return json((await utatenLyrics(String(body.title || ''), String(body.artist || '')).catch(() => null)) ?? { lines: [] });
+      case 'lyrics_url':
+        return json(await lyricsFromUrl(String(body.url || '')));
       case 'sheet': {
         const s = await getSheet(String(body.source), String(body.id), String(body.title || ''), String(body.artist || ''), !!body.force);
         return json(s);

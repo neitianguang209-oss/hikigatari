@@ -3,7 +3,6 @@
 // 途中で指やホイールで動かすと一時停止し、手を離したところから続きを刻む。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audioCtx, click as clickSound, holdPlayback, releasePlayback } from '../lib/sound.js';
-import { moraCount } from '../music/sheet.js';
 
 // 小節線の無い行の長さ(小節数)の見積もり。
 // ChordWiki の小節線つき譜面(10曲・333行)で、コード数と歌詞の音数から実際の小節数を当てはめた式。
@@ -65,71 +64,6 @@ export function unlockAudio() {
   audioCtx();
 }
 
-// 行の中の各コードが、行の頭から何拍目で鳴り始めるか(クリックとコードの目印をそろえるため)
-// ・小節線のある行: 小節ごとにまとめ、1小節の中に複数あれば等分(4拍子で2つなら 0・2拍目)
-// ・小節線のない行: 歌詞の長さ(音の数)の割合で置き、2拍きざみ(足りなければ1拍きざみ)にそろえる
-export function chordOnsets(line, beats, bpb) {
-  const segs = line.segs || [];
-  const idx = [];
-  segs.forEach((s, j) => s.c && idx.push(j));
-  const n = idx.length;
-  if (!n || !beats) return [];
-  if (n > beats) return idx.map((_, q) => (q * beats) / n);
-  if (line.bars) {
-    const nb = Math.max(1, Math.round(beats / bpb));
-    // コードの無い小節も数えて、各コードが何小節目かを出す(数が行の小節数と合うときだけ使う)
-    const barOf = [];
-    let bar = 0;
-    segs.forEach((s, j) => {
-      if (s.bar && j > 0) bar++;
-      barOf.push(bar);
-    });
-    if (bar + 1 === nb) {
-      const out = new Array(n);
-      const byBar = new Map();
-      idx.forEach((j, q) => {
-        if (!byBar.has(barOf[j])) byBar.set(barOf[j], []);
-        byBar.get(barOf[j]).push(q);
-      });
-      for (const [b, g] of byBar) g.forEach((q, m) => (out[q] = b * bpb + Math.round((m * bpb) / g.length)));
-      return out;
-    }
-    const groups = [];
-    idx.forEach((j, q) => {
-      if (q === 0 || segs[j].bar) groups.push([]);
-      groups[groups.length - 1].push(q);
-    });
-    const out = new Array(n);
-    groups.forEach((g, gi) => {
-      const bar = groups.length === nb ? gi : Math.floor((gi * nb) / groups.length);
-      g.forEach((q, m) => (out[q] = bar * bpb + Math.round((m * bpb) / g.length)));
-    });
-    return out;
-  }
-  const mora = segs.map((s) => moraCount(s.t || ''));
-  const total = mora.reduce((a, b) => a + b, 0);
-  const grid = beats >= n * 2 ? 2 : 1;
-  const out = [];
-  let acc = 0;
-  let prev = -Infinity;
-  segs.forEach((s, j) => {
-    if (s.c) {
-      const f = total ? acc / total : out.length / n;
-      let b = Math.round((f * beats) / grid) * grid;
-      if (b <= prev) b = prev + grid;
-      out.push(b);
-      prev = b;
-    }
-    acc += mora[j];
-  });
-  // 行の終わりをはみ出したぶんは、後ろから詰める
-  for (let q = n - 1; q >= 0; q--) {
-    const max = q === n - 1 ? beats - 1 : out[q + 1] - 1;
-    if (out[q] > max) out[q] = Math.max(0, max);
-  }
-  return out;
-}
-
 // clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
 // clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
 export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1 }) {
@@ -137,7 +71,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
   const [loop, setLoopState] = useState(null); // 区間リピート { from, to }(行の番号)
-  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, beatEl: null, beatShown: -1, sched: 0, chordQ: -1, chordEl: null }).current;
+  const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, beatEl: null, beatShown: -1, sched: 0 }).current;
   const live = useRef({});
 
   const tl = useMemo(() => {
@@ -152,13 +86,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     }
     const timed = [];
     durs.forEach((d, i) => d > 0 && timed.push(i));
-    // 曲全体の「コードが鳴り始める拍」の一覧(拍の順) { b, i: 行, k: 行の中で何番目のコード }
-    const onsets = [];
-    lines.forEach((l, i) => {
-      if (!durs[i]) return;
-      chordOnsets(l, durs[i], beatsPerBar).forEach((b, k) => onsets.push({ b: starts[i] + b, i, k }));
-    });
-    return { starts, durs, total: t, timed, onsets };
+    return { starts, durs, total: t, timed };
   }, [lines, barsPerLine, beatsPerBar]);
   s.tl = tl; // requestAnimationFrame のループからも常に最新の時間軸を見る
 
@@ -266,41 +194,6 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const clearHighlight = () => {
     scrollRef.current?.querySelector('.is-current')?.classList.remove('is-current');
     s.cur = -1;
-    clearChord();
-  };
-
-  // 今弾くコードの目印。クリックと同じ拍の時計で切り替える(描き直しで消えたら付け直す)
-  const chordAt = (b) => {
-    const o = s.tl.onsets;
-    let lo = 0;
-    let hi = o.length - 1;
-    if (hi < 0 || o[0].b > b) return -1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (o[mid].b <= b) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo;
-  };
-  const chordHighlight = (b) => {
-    const q = chordAt(b + 0.02); // 画面の書きかえの遅れぶん、ほんの少しだけ先に
-    const el = s.chordEl;
-    if (q === s.chordQ && el && el.isConnected && el.classList.contains('is-now')) return;
-    el?.classList.remove('is-now');
-    s.chordQ = q;
-    s.chordEl = null;
-    if (q < 0) return;
-    const { i, k } = s.tl.onsets[q];
-    const node = scrollRef.current?.querySelector(`[data-i="${i}"]`)?.querySelectorAll('.chord')[k];
-    if (node) {
-      node.classList.add('is-now');
-      s.chordEl = node;
-    }
-  };
-  const clearChord = () => {
-    s.chordEl?.classList.remove('is-now');
-    s.chordEl = null;
-    s.chordQ = -1;
   };
 
   const frame = (ts) => {
@@ -319,7 +212,6 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       }
       if (!s.holding) setScroll(posAtBeat(eff) - anchor());
       highlight(eff);
-      chordHighlight(eff);
       if (ts - s.lastProg > 250) {
         s.lastProg = ts;
         const d = c.duration();
@@ -359,7 +251,6 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     showBeat(((Math.floor(b + 1e-6) % bpb) + bpb) % bpb);
     if (!s.holding) setScroll(posAtBeat(eff) - anchor());
     highlight(eff);
-    if (s.countEnd == null) chordHighlight(eff);
     if (ts - s.lastProg > 250) {
       s.lastProg = ts;
       setProgress(s.tl.total ? Math.min(1, eff / s.tl.total) : 0);
