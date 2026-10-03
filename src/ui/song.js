@@ -4,7 +4,8 @@ import htm from 'htm';
 import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
-import { useAutoScroll, glideTo, glideHeading } from './autoscroll.js';
+import { useAutoScroll, glideTo, glideHeading, timelineBeats } from './autoscroll.js';
+import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
@@ -308,8 +309,6 @@ function SongReady({ song, reload }) {
   }, [parsed, displays, modulation]);
 
   const sheetBpm = song.sheet.bpm || parsed.meta.bpm || null; // 譜面に書かれたテンポ({tempo} など)
-  const bpm = st.bpm || sheetBpm || 90;
-  const bpmKnown = !!(st.bpm || sheetBpm);
   const hasBars = parsed.lines.some((l) => l.bars);
   const barsPerLine = st.barsPerLine ?? prefs.barsPerLine; // 0 = 自動で見積もる
   const fitSong = st.fitSong ?? true;
@@ -317,6 +316,25 @@ function SongReady({ song, reload }) {
   // 拍子: 譜面の {time:3/4} などから。曲ごとに選び直せる(メトロノームの強拍・カウント・1小節の長さが変わる)
   const sheetBpb = parsed.meta.beatsPerBar || song.sheet.beatsPerBar || 4;
   const beatsPerBar = st.beatsPerBar || sheetBpb;
+  // テンポ: 自分で決めた値 → 譜面に書かれた値 → 原曲の試聴から測った値 → 曲の長さからの見積もり の順。
+  // 試聴から測った値は倍・半分を取り違えることがあるので、曲の長さ(譜面の拍数 ÷ 曲の長さ)にいちばん近いものを選ぶ
+  const durSec = song.durationMs ? song.durationMs / 1000 : null;
+  const lenBpmAt = (b) => (durSec ? (timelineBeats(parsed.lines, barsPerLine, beatsPerBar, b) * 60) / durSec : null);
+  const autoBpm = useMemo(() => {
+    const x = song.tempo?.bpm;
+    if (!x) return null;
+    const len = lenBpmAt(x);
+    if (!len) return Math.round(x);
+    const cands = [x / 2, x, x * 2].filter((c) => c >= 45 && c <= 240);
+    return Math.round(cands.reduce((a, c) => (Math.abs(Math.log(c / len)) < Math.abs(Math.log(a / len)) ? c : a), cands[0] || x));
+  }, [song.tempo?.bpm, parsed, barsPerLine, beatsPerBar, durSec]);
+  const lenBpm = useMemo(() => {
+    const b = lenBpmAt(100);
+    return b ? Math.round(Math.max(50, Math.min(200, lenBpmAt(b) || b))) : null;
+  }, [parsed, barsPerLine, beatsPerBar, durSec]);
+  const bpmFrom = st.bpm ? 'user' : sheetBpm ? 'sheet' : autoBpm ? 'auto' : lenBpm ? 'len' : 'guess';
+  const bpm = st.bpm || sheetBpm || autoBpm || lenBpm || 90;
+  const bpmKnown = bpmFrom === 'user' || bpmFrom === 'sheet';
 
   // ---- 自分の歌(動画・録音)に合わせる
   // rec: この端末に置いた録音 / recOn: 録音に合わせて流すか(曲ごとに覚える) / 行の時刻の目印は録音ごとに settings.recSync に
@@ -444,19 +462,7 @@ function SongReady({ song, reload }) {
     let alive = true;
     (async () => {
       try {
-        let hit = null;
-        if (song.appleId) {
-          const j = await (await fetch(`https://itunes.apple.com/lookup?id=${song.appleId}&country=jp&lang=ja_jp`)).json();
-          hit = j.results?.[0] || null;
-        }
-        if (!hit) {
-          const q = `${baseTitle(song.title)} ${song.artist || ''}`.trim();
-          const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=jp&entity=song&limit=10&lang=ja_jp`);
-          const j = await r.json();
-          hit = (j.results || []).find(
-            (x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist)),
-          );
-        }
+        const hit = await appleTrackOf(song);
         if (!alive) return;
         await lib.patch(
           song.id,
@@ -477,6 +483,31 @@ function SongReady({ song, reload }) {
       alive = false;
     };
   }, [song.id]);
+
+  // テンポの分からない曲(U-FRET の譜面など)は、原曲の試聴(30秒)からテンポを測る。
+  // 1曲に1回だけ(結果は曲に覚えて、ほかの端末にも同期)。測れなかったら3日後にもう一度
+  useEffect(() => {
+    if (st.bpm || sheetBpm || song.tempo || !song.title) return;
+    if (song.tempoTriedAt && Date.now() - song.tempoTriedAt < 3 * 864e5) return;
+    let alive = true;
+    (async () => {
+      let tempo = null;
+      try {
+        const it = await appleTrackOf(song);
+        if (it?.previewUrl) {
+          const buf = await decodeAudio(await (await fetch(it.previewUrl)).arrayBuffer());
+          if (!alive) return;
+          const t = await detectTempo(await toMonoHQ(buf));
+          if (t && t.conf >= 1.4) tempo = { bpm: t.bpm, conf: t.conf, from: 'preview' };
+        }
+      } catch {}
+      if (!alive) return;
+      await lib.patch(song.id, tempo ? { tempo, tempoTriedAt: Date.now() } : { tempoTriedAt: Date.now() });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [song.id, sheetBpm, !!st.bpm]);
 
   // 画面を消さない(演奏中に暗くならないように)
   useEffect(() => {
@@ -519,7 +550,7 @@ function SongReady({ song, reload }) {
       } else if (e.key === 'ArrowRight' || e.key === '+' || e.key === 'ArrowLeft' || e.key === '-') {
         // 速さの微調整(2%ずつ)。BPM を変えても「曲の長さに合わせる」では速さが変わらないため、こちらを動かす
         const up = e.key === 'ArrowRight' || e.key === '+';
-        const p = Math.max(70, Math.min(130, Math.round(speed * 100) + (up ? 2 : -2)));
+        const p = Math.max(50, Math.min(150, Math.round(speed * 100) + (up ? 2 : -2)));
         setSt({ speed: p === 100 ? null : p / 100 });
         toast(`スクロールの速さ ${p}%`, { ms: 1000 });
       }
@@ -551,56 +582,77 @@ function SongReady({ song, reload }) {
     const k = shifts[chordTap.line] ?? 0;
     return { name: displays.get(k)?.get(chordTap.token) || chordTap.token, snd: sounding.get(chordTap.token), plain: easy ? plainDisplays.get(k)?.get(chordTap.token) || null : null };
   }, [chordTap, displays, plainDisplays, sounding, easy, modulation]);
-  // onText: 歌詞・コードの上を押した(行の右の空いたところは「画面を送る」のほうで扱う)
-  const onLineTap = useCallback(
-    (i, onText = true) => {
-      const line = parsed.lines[i];
-      const timed = line && (line.type === 'lyric' || line.type === 'chords');
-      if (loopSel) {
-        if (!timed) return;
-        if (loopSel.step === 'from') setLoopSel({ step: 'to', from: i });
-        else {
-          scroll.setLoop(loopSel.from, i);
-          setLoopSel(null);
-          toast('この区間をくり返します');
-        }
-        return;
+  // 押した高さにある行(歌詞・コードの行)。行と行のあいだ・行の右の空いたところを押しても、いちばん近い行
+  const lineAtY = (y) => {
+    const sc = scrollRef.current;
+    if (!sc) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const el of sc.querySelectorAll('.ln-lyric[data-i], .ln-chords[data-i]')) {
+      const r = el.getBoundingClientRect();
+      if (r.top > y + 200) break;
+      const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      if (d < bestD) {
+        bestD = d;
+        best = +el.dataset.i;
       }
-      if (recOn && scroll.playing) {
-        if (timed) addAnchor(i);
-        return;
-      }
-      // 歌詞を押すとその行へ(止まっているときは、そこから流し始められる位置へ)
-      if (onText && timed) scroll.jumpToLine(i);
-    },
-    [loopSel, scroll.playing, parsed, recOn, rec, st.recSync],
-  );
-  // 何も無いところを押すと、画面を下へ送る(止まっているときは6割ぶん、流しているときは次の行へ)。設定で切れる
-  const onSheetTap = (e) => {
-    if (prefs.tapToTurn === false || loopSel || (recOn && scroll.playing)) return;
-    if (e.target.closest('button, a, input, select, textarea, .seg, .ln-label, .song-head, .strip-top, .mod-mark, .ear-banner, .sheet-end')) return;
-    if (scroll.playing) scroll.step(1);
-    else pageTurn(1);
+    }
+    return bestD <= 80 ? best : null;
   };
-  // 見出し(サビ・Aメロ など)をタップ: 区間選び中ならその段落まるごとをくり返す / 演奏中ならそこへ飛ぶ
-  const hasLabels = useMemo(() => parsed.lines.some((l) => l.type === 'label'), [parsed]);
-  const onLabelTap = useCallback(
-    (i) => {
-      const r = sectionOf(parsed.lines, i);
-      if (!r) return;
-      if (loopSel) {
-        scroll.setLoop(r.from, r.to);
-        setLoopSel(null);
-        toast(`「${parsed.lines[i].text}」をくり返します`);
-      } else if (scroll.playing) scroll.jumpToLine(r.from);
+  // 「ここから流す」の印: 押した行を少しのあいだ光らせる(画面の上のほうの行は真ん中まで動けないので、どこから始まったか分かるように)
+  const flashLine = (i) => {
+    const el = scrollRef.current?.querySelector(`[data-i="${i}"]`);
+    if (!el) return;
+    el.classList.remove('is-start');
+    void el.offsetWidth;
+    el.classList.add('is-start');
+    setTimeout(() => el.classList.remove('is-start'), 1400);
+  };
+  // 行を押した: 区間リピートの区間選び / 録音の時刻の目印 / その行を画面の真ん中に寄せて、そこから流す(流していればその行へ移る)
+  const tapLine = (i) => {
+    if (loopSel) {
+      if (loopSel.step === 'from') setLoopSel({ step: 'to', from: i });
       else {
-        const sc = scrollRef.current;
-        const el = sc?.querySelector(`[data-i="${i}"]`);
-        if (el) glideTo(sc, sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 8);
+        scroll.setLoop(loopSel.from, i);
+        setLoopSel(null);
+        toast('この区間をくり返します');
       }
-    },
-    [loopSel, scroll.playing, parsed],
-  );
+      return;
+    }
+    if (recOn && scroll.playing) {
+      addAnchor(i);
+      return;
+    }
+    if (prefs.tapToStart === false) return;
+    // 区間リピート中に区間の外を押したら、リピートはやめてそこから
+    if (scroll.loop && (i < scroll.loop.from || i > scroll.loop.to)) scroll.setLoop(null);
+    flashLine(i);
+    scroll.startAt(i);
+  };
+  const onSheetTap = (e) => {
+    // コード名(押すと押さえ方)・見出しなどのボタンはそれぞれの動き。区間選び中は、コード名を押しても行を選ぶ
+    const btn = e.target.closest('button, a, input, select, textarea, .song-head, .strip-top, .mod-mark, .ear-banner, .sheet-end');
+    if (btn && !(loopSel && btn.classList.contains('chord'))) return;
+    const i = lineAtY(e.clientY);
+    if (i != null) tapLine(i);
+  };
+  // 見出し(サビ・Aメロ など)をタップ: 区間選び中ならその段落まるごとをくり返す / それ以外は、その段落の頭の行を押したのと同じ
+  const hasLabels = useMemo(() => parsed.lines.some((l) => l.type === 'label'), [parsed]);
+  const labelTap = useRef(null);
+  labelTap.current = (i) => {
+    const r = sectionOf(parsed.lines, i);
+    if (!r) return;
+    if (loopSel) {
+      scroll.setLoop(r.from, r.to);
+      setLoopSel(null);
+      toast(`「${parsed.lines[i].text}」をくり返します`);
+    } else if (prefs.tapToStart === false && !scroll.playing) {
+      const sc = scrollRef.current;
+      const el = sc?.querySelector(`[data-i="${i}"]`);
+      if (el) glideTo(sc, sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 8);
+    } else tapLine(r.from);
+  };
+  const onLabelTap = useCallback((i) => labelTap.current(i), []);
   const toggleLoop = () => {
     if (scroll.loop || loopSel) {
       scroll.setLoop(null);
@@ -675,7 +727,7 @@ function SongReady({ song, reload }) {
                   : html`<b>Key ${keyName(soundKey)}</b>`}
               </div>
               <div className="muted small">
-                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmKnown ? '' : '(仮)'} ・ ${sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
+                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmFrom === 'auto' || bpmFrom === 'len' ? '(推定)' : bpmKnown ? '' : '(仮)'} ・ ${sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
               </div>
             </div>
           </div>
@@ -695,7 +747,6 @@ function SongReady({ song, reload }) {
             inline=${inline}
             showBars=${prefs.showBars}
             onChord=${onChord}
-            onLine=${onLineTap}
             onLabel=${onLabelTap}
             loop=${loopRange}
             selecting=${!!loopSel}
@@ -749,8 +800,12 @@ function SongReady({ song, reload }) {
       onRec=${() => setPanel('rec')}
       scroll=${scroll}
       bpm=${bpm}
-      bpmKnown=${bpmKnown}
+      bpmKnown=${bpmFrom !== 'guess'}
       speed=${speed}
+      onSpeed=${(d) => {
+        const p = Math.max(50, Math.min(150, Math.round(speed * 100) + d));
+        setSt({ speed: p === 100 ? null : p / 100 });
+      }}
       click=${st.click ?? prefs.click}
       onClick=${() => {
         const on = !(st.click ?? prefs.click);
@@ -775,6 +830,8 @@ function SongReady({ song, reload }) {
       onClose=${() => setPanel(null)}
       bpm=${bpm}
       origBpm=${sheetBpm}
+      bpmFrom=${bpmFrom}
+      autoTempo=${autoBpm || lenBpm}
       setSt=${setSt}
       hasBars=${hasBars}
       barsPerLine=${barsPerLine}
@@ -799,7 +856,7 @@ function SongReady({ song, reload }) {
       song=${song}
       reload=${reload}
       onText=${() => setPanel('text')}
-      onTuner=${() => { prepareTuner(); setPanel('tuner'); }}
+      onTuner=${() => { prepareTuner(); scroll.stop(); setPanel('tuner'); }}
       onApple=${onApple}
       rec=${rec}
       recOn=${recOn}
@@ -896,7 +953,7 @@ function sectionOf(lines, i) {
   return from < 0 ? null : { from, to };
 }
 
-const SheetLines = memo(function SheetLines({ lines, display, displays = null, shifts = null, marks = null, onMark = null, instrument, inline, showBars, onChord, onLine, onLabel = null, loop = null, selecting = false, picks = null }) {
+const SheetLines = memo(function SheetLines({ lines, display, displays = null, shifts = null, marks = null, onMark = null, instrument, inline, showBars, onChord, onLabel = null, loop = null, selecting = false, picks = null }) {
   const ref = useRef(null);
   useLayoutEffect(() => {
     fitLines(ref.current);
@@ -928,7 +985,7 @@ const SheetLines = memo(function SheetLines({ lines, display, displays = null, s
     ${lines.map((l, i) => {
       const mk = marks?.get(i);
       const d = (displays && shifts && displays.get(shifts[i])) || display;
-      const row = html`<${Line} key=${i} i=${i} line=${l} display=${d} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLine=${onLine} onLabel=${onLabel} selecting=${selecting} picks=${picks} loopMark=${!loop || i < loop.from || i > loop.to ? '' : cx('in-loop', i === loop.from && 'loop-start', i === loop.to && 'loop-end')} />`;
+      const row = html`<${Line} key=${i} i=${i} line=${l} display=${d} instrument=${instrument} inline=${inline} showBars=${showBars} onChord=${onChord} onLabel=${onLabel} selecting=${selecting} picks=${picks} loopMark=${!loop || i < loop.from || i > loop.to ? '' : cx('in-loop', i === loop.from && 'loop-start', i === loop.to && 'loop-end')} />`;
       return mk ? [html`<${ModMark} key=${'m' + i} mark=${mk} instrument=${instrument} onToggle=${onMark} />`, row] : row;
     })}
   </div>`;
@@ -937,7 +994,7 @@ const SheetLines = memo(function SheetLines({ lines, display, displays = null, s
 // サビの見出しは少し目立たせる
 const SABI_RE = /サビ|chorus|ｻﾋﾞ/i;
 
-const Line = memo(function Line({ line, i, display, instrument, inline, showBars, onChord, onLine, onLabel, selecting, picks, loopMark }) {
+const Line = memo(function Line({ line, i, display, instrument, inline, showBars, onChord, onLabel, selecting, picks, loopMark }) {
   if (line.type === 'blank') return html`<div className="ln ln-blank" data-i=${i}></div>`;
   if (line.type === 'label')
     return html`<div className=${cx('ln ln-label', SABI_RE.test(line.text) && 'is-sabi', loopMark)} data-i=${i}>
@@ -945,7 +1002,7 @@ const Line = memo(function Line({ line, i, display, instrument, inline, showBars
     </div>`;
   if (line.type === 'comment') return html`<div className="ln ln-comment" data-i=${i}>${line.text}</div>`;
   const hasChord = line.segs.some((s) => s.c);
-  return html`<div className=${cx('ln', 'ln-' + line.type, line.chorus && 'is-chorus', !hasChord && 'ln-plain', loopMark)} data-i=${i} onClick=${(e) => onLine(i, !!e.target.closest('.seg'))}>
+  return html`<div className=${cx('ln', 'ln-' + line.type, line.chorus && 'is-chorus', !hasChord && 'ln-plain', loopMark)} data-i=${i}>
     ${line.segs.map((s, k) => {
       const name = s.c ? display.get(s.c) || s.c : null;
       return html`<span className=${cx('seg', s.c && 'has-chord')} key=${k}>
@@ -1013,7 +1070,7 @@ export function SheetPreview({ lines }) {
     for (const l of lines) if (l.segs) for (const s of l.segs) if (s.c) m.set(s.c, s.c);
     return m;
   }, [lines]);
-  return html`<div className="sheet-inner preview"><${SheetLines} lines=${lines} display=${display} instrument="piano" inline=${false} showBars=${true} onChord=${() => {}} onLine=${() => {}} /></div>`;
+  return html`<div className="sheet-inner preview"><${SheetLines} lines=${lines} display=${display} instrument="piano" inline=${false} showBars=${true} onChord=${() => {}} /></div>`;
 }
 
 const MiniDiagram = memo(function MiniDiagram({ name, instrument, pick }) {
@@ -1035,9 +1092,29 @@ function ChordStrip({ names, instrument, onTap, vertical = false, picks = null }
 // ---------------------------------------------------------------- 再生バー
 
 // rec: 自分の録音に合わせているとき(テンポの代わりに「録音」、メトロノームは出さない)
-function Transport({ scroll, bpm, bpmKnown, click, onClick, onTempo, looping, onLoop, rec = false, onRec, speed = 1 }) {
+function Transport({ scroll, bpm, bpmKnown, click, onClick, onTempo, looping, onLoop, rec = false, onRec, speed = 1, onSpeed }) {
+  // 速さの −/＋: 流している間(と、変えた直後の少しのあいだ)だけ、再生バーのすぐ上に出す
+  const [peek, setPeek] = useState(0);
+  useEffect(() => {
+    if (!peek) return;
+    const t = setTimeout(() => setPeek(0), 2500);
+    return () => clearTimeout(t);
+  }, [peek]);
+  const nudge = (d) => {
+    onSpeed(d);
+    setPeek(Date.now());
+  };
+  const pct = Math.round(speed * 100);
+  const showSpeed = !rec && !!onSpeed && (scroll.playing || !!scroll.countdown || !!peek);
   return html`<div className=${cx('transport', rec && 'is-rec')}>
     ${rec ? null : html`<div className="transport-progress" style=${{ transform: `scaleX(${scroll.progress})` }}></div>`}
+    ${showSpeed
+      ? html`<div className="speed-pill" role="group" aria-label="スクロールの速さ">
+          <button onClick=${() => nudge(-5)} disabled=${pct <= 50} aria-label="5%遅く">−</button>
+          <button className="speed-pill-now" onClick=${onTempo} aria-label="テンポと速さの設定"><small>速さ</small><b>${pct}%</b></button>
+          <button onClick=${() => nudge(5)} disabled=${pct >= 150} aria-label="5%速く">＋</button>
+        </div>`
+      : null}
     <button className="icon-btn" onClick=${scroll.toStart} aria-label="最初に戻る"><${Icon} name="skipBack" /></button>
     ${rec
       ? html`<button className="tempo-btn rec-btn" onClick=${onRec} aria-label="録音の設定">
@@ -1212,6 +1289,15 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument }) {
 
 const mmss = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
 
+// テンポがどこから来たか
+function tempoNote(from, orig, auto) {
+  if (from === 'sheet') return `譜面に書かれたテンポです`;
+  if (from === 'user') return orig ? `元のテンポ ${orig}（自分で変えています）` : auto ? `自動のテンポ ${auto}（自分で変えています）` : '自分で決めたテンポです';
+  if (from === 'auto') return '原曲の試聴から自動で測ったテンポです。ずれていたら、曲に合わせて「タップで合わせる」を押してください';
+  if (from === 'len') return '曲の長さから見積もったテンポです。曲に合わせて「タップで合わせる」を押すと正確になります';
+  return '元のテンポが分からない曲です。曲に合わせてタップしてください';
+}
+
 // メトロノームだけを鳴らす(自動スクロールとは別に、テンポの確認・練習用)。先の拍を少し前もって予約するので、ずれにくい
 function Metronome({ bpm, beatsPerBar = 4, volume, setVolume }) {
   const [on, setOn] = useState(false);
@@ -1267,9 +1353,9 @@ function Metronome({ bpm, beatsPerBar = 4, volume, setVolume }) {
   </div>`;
 }
 
-function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, sheetBpb = 4, meter = 0, clickVolume = 1, setClickVolume, clickOn = false, speed = 1, showCurrent = true, setShowCurrent }) {
+function TempoPanel({ open, onClose, bpm, origBpm, bpmFrom = 'sheet', autoTempo = null, setSt, hasBars, barsPerLine, custom, fit, fitSong, durationMs, beatsPerBar = 4, sheetBpb = 4, meter = 0, clickVolume = 1, setClickVolume, clickOn = false, speed = 1, showCurrent = true, setShowCurrent }) {
   const pct = Math.round(speed * 100);
-  const setPct = (p) => setSt({ speed: Math.abs(p - 100) < 0.5 ? null : Math.max(70, Math.min(130, p)) / 100 });
+  const setPct = (p) => setSt({ speed: Math.abs(p - 100) < 0.5 ? null : Math.max(50, Math.min(150, p)) / 100 });
   const taps = useRef([]);
   const tap = () => {
     const now = performance.now();
@@ -1284,14 +1370,14 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
   return html`<${Sheet} open=${open} onClose=${onClose} title="テンポ（スクロールの速さ）">
     <div className="key-big">
       <div className="key-now">♩ = ${bpm}</div>
-      <div className="muted small">${origBpm ? `元のテンポ ${origBpm}` : '元のテンポが分からない曲です。曲に合わせてタップしてください'}</div>
+      <div className="muted small">${tempoNote(bpmFrom, origBpm, autoTempo)}</div>
     </div>
     <div className="panel-field speed-field">
       <div className="panel-field-label">スクロールの速さ（自分で微調整）<b className=${cx('speed-now', pct !== 100 && 'is-on')}>${pct}%</b></div>
       <div className="speed-row">
         <button className="btn" onClick=${() => setPct(pct - 5)} aria-label="5%遅く">−5</button>
         <button className="btn" onClick=${() => setPct(pct - 1)} aria-label="1%遅く">−1</button>
-        <input type="range" className="range" min="70" max="130" step="1" value=${pct} onInput=${(e) => setPct(Number(e.target.value))} aria-label="スクロールの速さ" />
+        <input type="range" className="range" min="50" max="150" step="1" value=${pct} onInput=${(e) => setPct(Number(e.target.value))} aria-label="スクロールの速さ" />
         <button className="btn" onClick=${() => setPct(pct + 1)} aria-label="1%速く">+1</button>
         <button className="btn" onClick=${() => setPct(pct + 5)} aria-label="5%速く">+5</button>
       </div>
@@ -1303,7 +1389,7 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
       <button className="btn btn-tap" onPointerDown=${tap}>タップで合わせる</button>
       <button className="btn" onClick=${() => setSt({ bpm: Math.min(300, bpm * 2) })}>×2</button>
     </div>
-    ${custom && origBpm ? html`<div className="row-gap center"><button className="btn btn-ghost" onClick=${() => setSt({ bpm: null })}>元のテンポ（${origBpm}）に戻す</button></div>` : null}
+    ${custom && (origBpm || autoTempo) ? html`<div className="row-gap center"><button className="btn btn-ghost" onClick=${() => setSt({ bpm: null })}>${origBpm ? `元のテンポ（${origBpm}）` : `自動のテンポ（${autoTempo}）`}に戻す</button></div>` : null}
     <div className="panel-field">
       <div className="panel-field-label">拍子</div>
       <${Segmented}
@@ -1346,7 +1432,7 @@ function TempoPanel({ open, onClose, bpm, origBpm, setSt, hasBars, barsPerLine, 
             onChange=${(v) => setSt({ barsPerLine: v })}
             options=${[{ value: 0, label: '自動' }, ...[1, 2, 3, 4].map((n) => ({ value: n, label: `${n}小節` }))]}
           />
-          <p className="panel-note">「自動」は、コードの数と歌詞の長さから行ごとに小節数を見積もります。ずれるときは演奏中に行をタップするとそこへ飛びます。</p>
+          <p className="panel-note">「自動」は、コードの数と歌詞の長さから行ごとに小節数を見積もります。ずれてきたら、いま弾いている行をタップすると、その行が真ん中に来て続きから流れます。</p>
         </div>`}
   </${Sheet}>`;
 }
@@ -1359,6 +1445,17 @@ function TextPanel({ open, onClose, fontScale, setSt }) {
     <input type="range" className="range" min="0.7" max="1.8" step="0.05" value=${fontScale} onInput=${(e) => setSt({ fontScale: Number(e.target.value) })} aria-label="文字の大きさ" />
     <div className="row-gap center"><button className="btn btn-ghost" onClick=${() => setSt({ fontScale: null })}>標準に戻す</button></div>
   </${Sheet}>`;
+}
+
+// Apple の曲データ(曲の長さ・試聴・曲のページ)。曲の番号が分かっていればそれ、無ければ曲名とアーティスト名で探す
+async function appleTrackOf(song) {
+  if (song.appleId) {
+    const j = await (await fetch(`https://itunes.apple.com/lookup?id=${song.appleId}&country=jp&lang=ja_jp`)).json();
+    if (j.results?.[0]) return j.results[0];
+  }
+  const q = `${baseTitle(song.title)} ${song.artist || ''}`.trim();
+  const j = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=jp&entity=song&limit=10&lang=ja_jp`)).json();
+  return (j.results || []).find((x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist))) || null;
 }
 
 // 原曲を Apple Music で開く(曲が特定できていればその曲、分からなければ検索)

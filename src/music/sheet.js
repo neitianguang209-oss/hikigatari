@@ -40,8 +40,10 @@ function parseBody(line, chorus) {
   let cur = { c: null, t: '', bar: false };
   let pendingBar = false;
   let markers = 0;
-  let firstTok = null;
-  let lastTok = null;
+  // 小節線で区切った「かたまり」ごとに、コード・文字があるか(小節の数を数えるのに使う)
+  let chunk = { chord: false, text: false };
+  let lead = null; // 最初の小節線より前
+  let inner = 0; // 小節線と小節線のあいだ(= 1小節ずつ)
   const re = /\[([^\]]*)\]|\|/g;
   let last = 0;
   let m;
@@ -52,15 +54,15 @@ function parseBody(line, chorus) {
     const before = src.slice(last, m.index);
     if (before) {
       cur.t += before;
-      lastTok = 'text';
-      if (firstTok == null && before.trim()) firstTok = 'text';
+      if (before.trim()) chunk.text = true;
     }
     last = re.lastIndex;
     const tok = m[0] === '|' ? '|' : m[1].trim();
     if (tok === '|' || tok === '||' || tok === '|:' || tok === ':|') {
+      if (markers === 0) lead = chunk;
+      else inner++;
+      chunk = { chord: false, text: false };
       markers++;
-      if (firstTok == null) firstTok = 'bar';
-      lastTok = 'bar';
       if (cur.c || cur.t.trim()) {
         flush();
         cur = { c: null, t: '', bar: true };
@@ -72,8 +74,7 @@ function parseBody(line, chorus) {
     }
     const ch = parseChord(tok);
     if (ch) {
-      if (firstTok == null) firstTok = 'chord';
-      lastTok = 'chord';
+      chunk.chord = true;
       if (cur.c || cur.t) {
         flush();
         cur = { c: tok, t: '', bar: pendingBar };
@@ -90,7 +91,7 @@ function parseBody(line, chorus) {
   const tail = src.slice(last);
   if (tail) {
     cur.t += tail;
-    if (tail.trim()) lastTok = 'text';
+    if (tail.trim()) chunk.text = true;
   }
   flush();
   // ChordWiki のリズム記号(>=アクセント、-=8分、==16分)は、単独の語になっているものだけ消す
@@ -102,12 +103,15 @@ function parseBody(line, chorus) {
   const plain = segs.map((s) => s.t).join('');
   const hasText = plain.replace(/[\s　\-=>|・.○●ー－~]/g, '').length > 0;
   const hasChord = segs.some((s) => s.c);
+  // 小節の数 = 小節線と小節線のあいだの数
+  //  + 最初の小節線より前にコードがあればその1小節(「何十|[Fm7]回の…」の「何十」のような、前の小節からはみ出した歌い出しは数えない)
+  //  + 最後の小節線より後ろに何かあればその1小節(行の終わりの「|」は小節の閉じ線)
+  // 小節線が1本だけの行(ChordWiki で「行の終わりにだけ |」など、フレーズの区切りとして書かれていることが多い)は、
+  // 小節の数の手がかりにならないので、コードの数と歌詞の長さからの見積もりにまかせる
+  // ただし行の頭に小節線が1本だけの行(「|[C]歌詞」。耳コピの下書きの1小節の行など)は、その1小節
   let bars = null;
-  if (markers) {
-    const startsBar = firstTok === 'bar';
-    const endsBar = lastTok === 'bar';
-    bars = Math.max(1, markers - (startsBar && endsBar ? 1 : 0) + (!startsBar && !endsBar ? 1 : 0));
-  }
+  if (markers >= 2) bars = Math.max(1, inner + (lead.chord ? 1 : 0) + (chunk.chord || chunk.text ? 1 : 0));
+  else if (markers === 1 && !lead.chord && !lead.text && (chunk.chord || chunk.text)) bars = 1;
   if (!hasChord) {
     if (LABEL_RE.test(plain)) return { type: 'label', text: plain.trim().replace(/^[【\[(（<＜《]\s*|\s*[】\])）>＞》]$/g, ''), chorus };
     return { type: 'lyric', segs: [{ c: null, t: plain, bar: false }], bars, chorus, chordCount: 0, mora: moraCount(plain) };

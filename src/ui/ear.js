@@ -120,6 +120,7 @@ export function EarCopy({ params }) {
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState({ bar: -1, row: -1 });
   const [shift, setShift] = useState(0); // 歌詞のタイミングの手直し(秒)
+  const [pv, setPv] = useState(null); // 試聴30秒に歌詞を当てはめる: { tap: 歌い出しを押した試聴の時刻, line: その行(歌詞の番号) }
   const [taps, setTaps] = useState(null); // 時刻なしの歌詞: 行ごとにタップした録音の時刻
   const [tapping, setTapping] = useState(false);
   const [place, setPlace] = useState({}); // 耳で直したコードの位置 { 'i:時刻': 文字の位置 }
@@ -163,6 +164,7 @@ export function EarCopy({ params }) {
     setChecked(new Set());
     setTaps(null);
     setShift(0);
+    setPv(null);
   }, [lyrics]);
 
   useEffect(() => () => {
@@ -184,6 +186,7 @@ export function EarCopy({ params }) {
     setChecked(new Set());
     setShift(0);
     setTaps(null);
+    setPv(null);
     try {
       const r = await analyzeAudio(samples, { progress: (p, text) => setStage({ p, text }) });
       if (!r.bars.length) throw new Error('コードを聴き取れませんでした');
@@ -343,15 +346,24 @@ export function EarCopy({ params }) {
 
   // ---------------------------------------------------------------- 歌詞を当てはめる
   const weights = useMemo(() => makeWeights(lyrics?.ruby), [lyrics]);
+  // 歌詞の時刻(元の曲の頭から)を、録音の時刻にずらす
+  const shiftLines = (lines, off) => lines.map((l) => ({ t: l.t + off, text: l.text, words: l.words ? l.words.map((w) => ({ ...w, t: w.t + off })) : null }));
   const fit = useMemo(() => {
-    if (!result || result.kind !== 'full' || !lyrics) return null;
+    if (!result || !lyrics) return null;
     const note = `耳コピの下書き（${result.source}・自動）・歌詞は${lyrics.source}`;
+    // 試聴30秒: 曲のどこの部分かは、流しながら歌い出しで押してもらった時刻と、その行から決める
+    if (result.kind === 'preview') {
+      if (!lyrics.synced || pv?.tap == null || pv?.line == null || !lyrics.synced[pv.line]) return null;
+      const off = pv.tap - TAP_DELAY - lyrics.synced[pv.line].t + shift;
+      return { ...fitLyrics(result.r, shiftLines(lyrics.synced, off), { note, weights, place, partial: true }), mode: 'synced' };
+    }
+    if (result.kind !== 'full') return null;
     if (lyrics.synced) {
       const first = lyrics.synced.find((l) => l.text);
       // 録音の時刻 = 歌詞の時刻 + ずれ。歌い出しのタップがあればそれ、無ければ曲が鳴り始めた時刻から
       const base = result.tapFirst != null ? result.tapFirst - 0.2 - first.t : result.start || 0;
       const off = base + shift;
-      return { ...fitLyrics(result.r, lyrics.synced.map((l) => ({ t: l.t + off, text: l.text })), { note, weights, place }), mode: 'synced' };
+      return { ...fitLyrics(result.r, shiftLines(lyrics.synced, off), { note, weights, place }), mode: 'synced' };
     }
     if (taps && taps.length) {
       const lines = [];
@@ -363,7 +375,7 @@ export function EarCopy({ params }) {
       return { ...fitLyrics(result.r, lines, { note, weights, place }), mode: 'tap' };
     }
     return null;
-  }, [result, lyrics, shift, taps, place, weights]);
+  }, [result, lyrics, shift, taps, place, weights, pv]);
   const plainLines = useMemo(() => (lyrics?.plain || []).filter(Boolean), [lyrics]);
   const lyricRows = useMemo(() => (fit?.rows || []).map((r, k) => (r.kind === 'lyric' ? k : -1)).filter((k) => k >= 0), [fit]);
 
@@ -571,7 +583,7 @@ export function EarCopy({ params }) {
           : lyrics === null
             ? '歌詞は見つかりませんでした。歌詞サイトのリンクか、歌詞そのものを貼り付けると当てはめられます'
             : lyrics.synced
-              ? html`歌詞が見つかりました（${lyrics.source}・時刻つき）。1曲まるごと聴かせると、コードを歌詞の行に当てはめます`
+              ? html`歌詞が見つかりました（${lyrics.source}・${lyrics.wordTimed ? '1文字ずつの時刻つき' : '時刻つき'}）。1曲まるごと聴かせると、コードを歌詞の文字の上に当てはめます`
               : html`歌詞: ${lyrics.source}（${plainLines.length}行）。時刻が無いので、聴き取ったあとに各行の歌い出しをタップして合わせます`}
         ${lyrics?.ruby?.size ? html` <small>ふりがな ${lyrics.ruby.size}語</small>` : null}
         ${durSec ? html` <small>曲の長さ ${mmss(durSec)}</small>` : null}
@@ -635,7 +647,7 @@ export function EarCopy({ params }) {
               <span className="ear-source-icon"><${Icon} name="headphones" /></span>
               <span className="ear-source-text">
                 <b>試聴30秒で手早く</b>
-                <small>Apple Music の試聴を使います。曲の一部（サビのことが多い）だけで、歌詞は当てはめません${track && !track.previewUrl ? '。この曲は試聴が無いようです' : ''}</small>
+                <small>Apple Music の試聴を使います。曲の一部（サビのことが多い）だけ。歌い出しを1回押すと、その部分に歌詞も当てはめます${track && !track.previewUrl ? '。この曲は試聴が無いようです' : ''}</small>
               </span>
             </button>
             <input ref=${fileRef} type="file" accept="audio/*,video/mp4" hidden onChange=${(e) => fromFile(e.target.files?.[0])} />
@@ -675,13 +687,32 @@ export function EarCopy({ params }) {
                 </button>
                 ${fit?.mode === 'synced'
                   ? html`<span className="ear-shift" role="group" aria-label="歌詞のタイミング">
-                      <span className="muted small">歌詞全体のタイミング</span>
-                      <button className="btn btn-sm" onClick=${() => setShift((s) => Math.round((s - 0.25) * 100) / 100)}>早く</button>
+                      <span className="muted small">歌詞全体のタイミング（早く ← → 遅く）</span>
+                      <button className="btn btn-sm" onClick=${() => setShift((s) => Math.round((s - 1) * 100) / 100)} aria-label="歌詞を1秒早く">−1</button>
+                      <button className="btn btn-sm" onClick=${() => setShift((s) => Math.round((s - 0.1) * 100) / 100)} aria-label="歌詞を0.1秒早く">−0.1</button>
                       <b>${signedSec(shift)}秒</b>
-                      <button className="btn btn-sm" onClick=${() => setShift((s) => Math.round((s + 0.25) * 100) / 100)}>遅く</button>
+                      <button className="btn btn-sm" onClick=${() => setShift((s) => Math.round((s + 0.1) * 100) / 100)} aria-label="歌詞を0.1秒遅く">+0.1</button>
+                      <button className="btn btn-sm" onClick=${() => setShift((s) => Math.round((s + 1) * 100) / 100)} aria-label="歌詞を1秒遅く">+1</button>
                     </span>`
                   : null}
               </div>`}
+
+          ${result.kind === 'preview' && lyrics?.synced && !tapping
+            ? html`<div className="ear-pv">
+                ${fit && fit.used
+                  ? html`<p className="small">試聴の部分（${fit.used}行）に歌詞を当てはめました。 <button className="link-btn" onClick=${() => setPv(null)}>歌い出しを選び直す</button></p>`
+                  : pv?.tap == null
+                    ? html`<p className="small"><b>試聴の部分にも歌詞を当てはめられます。</b>試聴は曲の一部だけなので、どこの部分かを教えてください。</p>
+                        ${playing
+                          ? html`<button className="btn btn-primary btn-lg ear-tap-btn" onClick=${() => setPv({ tap: audioRef.current?.currentTime ?? 0, line: null })}>いま歌い出した！</button>`
+                          : html`<button className="btn btn-primary" onClick=${() => play(0)}><${PlayIcon} playing=${false} size=${18} /> 試聴を流す</button>`}
+                        <p className="muted small">流しながら、歌の行が始まった瞬間に「いま歌い出した！」を押してください（どの行でも大丈夫です）。</p>`
+                    : html`<p className="small"><b>${pv.tap.toFixed(1)}秒のところで歌い出したのは、どの行ですか？</b> <button className="link-btn" onClick=${() => setPv(null)}>押し直す</button></p>
+                        <div className="ear-pv-lines" role="list">
+                          ${lyrics.synced.map((l, k) => (l.text ? html`<button key=${k} role="listitem" className="ear-pv-line" onClick=${() => { stopPlay(); setPv({ ...pv, line: k }); }}>${l.text}</button>` : null))}
+                        </div>`}
+              </div>`
+            : null}
 
           ${result.kind === 'full' && lyrics && !lyrics.synced && !tapping
             ? html`<div className="ear-tap-intro">
@@ -713,9 +744,9 @@ export function EarCopy({ params }) {
               </div>`}
           <p className="muted small">
             ${fit && fit.used
-              ? `歌詞${fit.used}行にコードを当てはめました。自動の位置は、ふりがな（あれば）で数えた歌う長さからの見積もりです。耳で合わせた行には ✓ が付きます。`
+              ? `歌詞${fit.used}行にコードを当てはめました。${lyrics?.wordTimed ? '自動の位置は、歌詞の1文字ずつの歌い始めの時刻から決めています。' : '自動の位置は、ふりがな（あれば）で数えた歌う長さからの見積もりです。'}耳で合わせた行には ✓ が付きます。`
               : result.kind === 'preview'
-                ? '試聴は曲の一部だけなので、歌詞は当てはめていません。小節をタップすると、そこから聴けます。'
+                ? (lyrics?.synced ? '上で歌い出しを教えると、試聴の部分に歌詞を当てはめます。' : '試聴は曲の一部だけです。') + '小節をタップすると、そこから聴けます。'
                 : '小節をタップすると、そこから聴けます。'}
             保存したあとは、ギターの押さえ方・カポ・自動スクロールもふつうの譜面と同じように使えます。どこかのサイトに譜面が出たら、ホームでお知らせします。
           </p>
@@ -787,9 +818,15 @@ function SheetPreview({ rows, cur, innerRef, onRow, checked }) {
   </div>`;
 }
 
-// 今歌っているあたりの文字。合わせたコードの位置(時刻と文字)を目印にして、目印の間は歌う長さの割合で割り振る
+// 今歌っているあたりの文字。文字ごとの時刻(KRC)があればその文字そのもの。
+// 無ければ、合わせたコードの位置(時刻と文字)を目印にして、目印の間は歌う長さの割合で割り振る
 function singingAt(line, chords, t) {
   const n = line.chars.length;
+  if (line.marks?.length) {
+    let p = -1;
+    for (const m of line.marks) if (m.t <= t + 0.03 && t < Math.max(m.e, m.t + 0.12) + 0.15) p = m.p;
+    return p;
+  }
   if (t < line.s || t >= line.e || !n) return -1;
   const marks = [{ t: line.s, p: 0 }, ...chords.filter((c) => c.t > line.s && c.t < line.e).map((c) => ({ t: c.t, p: c.pos })), { t: line.e, p: n }];
   let k = 0;

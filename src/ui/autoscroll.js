@@ -1,25 +1,36 @@
 // BPMに合わせた自動スクロール。
-// 譜面の各行に「何拍ぶんか」を割り当てて時間軸を作り、今の拍が画面の上から3割の位置に来るよう滑らかに動かす。
+// 譜面の各行に「何拍ぶんか」を割り当てて時間軸を作り、今弾いている行が画面の真ん中に来るよう滑らかに動かす
+// (行の真ん中の高さを目印にする。行の頭で、その行の真ん中がちょうど画面の真ん中)。
+// 行をタップすると、その行が真ん中へ寄ってきて、そこから流れ始める(流している間はその行へ移る)。
 // 途中で指やホイールで動かすと一時停止し、手を離したところから続きを刻む。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audioCtx, click as clickSound, holdPlayback, releasePlayback } from '../lib/sound.js';
 
 // 小節線の無い行の長さ(小節数)の見積もり。
-// ChordWiki の小節線つき譜面(10曲・333行)で、コード数と歌詞の音数から実際の小節数を当てはめた式。
-// 「1行=2小節」決め打ちだと平均1.3小節ずれていたのが、約0.6小節に縮む。
-export function estimateBars(line) {
+// ChordWiki の小節線つき譜面(10曲・319行)で、コード数と歌詞の音数から実際の小節数を当てはめた式。
+// 速い曲ほど1小節に入る音が少ない(1秒あたりに歌える音の数はだいたい同じ)ので、歌詞の音数にテンポをかける。
+// 曲ごとに1曲ずつ外して確かめた誤差は平均0.67小節・偏り0(2026-10 に小節の数え方を直して当てはめ直し。
+// 前の式は「何十|」のようなはみ出しを1小節と数えた正解で作っていたので、1行あたり0.4小節長めに出ていた)
+export function estimateBars(line, bpm = 100) {
   if (line.type === 'chords') return Math.min(8, Math.max(1, Math.round(0.4 * line.chordCount + 1)));
-  const est = 0.267 * (line.chordCount || 0) + 0.056 * (line.mora || 0) + 1.05;
+  const est = 0.3125 * (line.chordCount || 0) + 0.0443 * (line.mora || 0) * (Math.max(50, Math.min(200, bpm || 100)) / 100) + 0.6056;
   return Math.min(8, Math.max(1, Math.round(est)));
 }
 
-// barsPerLine: 0 = 自動で見積もる / 1〜4 = その小節数に固定
-export function lineBeats(line, barsPerLine, bpb) {
+// barsPerLine: 0 = 自動で見積もる / 1〜4 = その小節数に固定。bpm: 見積もりに使うテンポ
+export function lineBeats(line, barsPerLine, bpb, bpm = 100) {
   if (line.type !== 'lyric' && line.type !== 'chords') return 0;
   if (line.bars) return line.bars * bpb;
-  if (!barsPerLine) return estimateBars(line) * bpb;
+  if (!barsPerLine) return estimateBars(line, bpm) * bpb;
   if (line.type === 'chords') return Math.min(8, Math.max(1, line.chordCount)) * bpb;
   return barsPerLine * bpb;
+}
+
+// 譜面全体の拍数(BPM が分からない曲で、曲の長さからテンポを見積もるのに使う)
+export function timelineBeats(lines, barsPerLine, bpb, bpm = 100) {
+  let t = 0;
+  for (const l of lines) t += lineBeats(l, barsPerLine, bpb, bpm);
+  return t;
 }
 
 // 譜面全体を曲の実際の長さに合わせるための倍率(時間の伸び縮み)。合わせないときは 1
@@ -59,6 +70,9 @@ export function timeAtBeat(b, anchors, starts, bps) {
   const L = p.length - 1;
   return p[L][0] + (b - p[L][1]) / (L > 0 ? rate(L - 1) : bps);
 }
+
+// 今弾いている行を置く高さ(画面の上から何割か)
+const READ_AT = 0.5;
 
 export function unlockAudio() {
   audioCtx();
@@ -108,7 +122,7 @@ export function glideTo(el, top, ms = null) {
 // clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
 // clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
 // speed: 自分で決める速さの微調整(1 = そのまま。クリック音も同じだけ速く・遅くなるので、ずれない)
-export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1, speed = 1 }) {
+export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1, speed = 1, estBpm = null }) {
   const [playing, setPlaying] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -121,7 +135,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     const durs = [];
     let t = 0;
     for (const l of lines) {
-      const d = lineBeats(l, barsPerLine, beatsPerBar);
+      const d = lineBeats(l, barsPerLine, beatsPerBar, estBpm || bpm);
       starts.push(t);
       durs.push(d);
       t += d;
@@ -129,7 +143,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     const timed = [];
     durs.forEach((d, i) => d > 0 && timed.push(i));
     return { starts, durs, total: t, timed };
-  }, [lines, barsPerLine, beatsPerBar]);
+  }, [lines, barsPerLine, beatsPerBar, estBpm || bpm]);
   s.tl = tl; // requestAnimationFrame のループからも常に最新の時間軸を見る
 
   // 曲の長さに合わせる: 譜面の拍を進める速さだけを変える(クリック音は本来のBPMのまま)
@@ -159,7 +173,10 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     });
   }, []);
 
-  const anchor = () => (scrollRef.current ? scrollRef.current.clientHeight * 0.3 : 200);
+  // 読む位置 = 画面の真ん中
+  const anchor = () => (scrollRef.current ? scrollRef.current.clientHeight * READ_AT : 300);
+  // 行の目印の高さ = 行の真ん中
+  const midOf = (i) => (s.tops[i] ?? 0) + (s.heights[i] || 0) / 2;
 
   const timedIndexAt = (b) => {
     const { timed, starts, durs } = s.tl;
@@ -174,24 +191,25 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     return lo;
   };
 
+  // 拍 → 譜面の中の高さ(行の頭でその行の真ん中、行の終わりで次の行の真ん中)
   const posAtBeat = (b) => {
     const { timed, starts, durs } = s.tl;
     const k = timedIndexAt(b);
     if (k < 0) return 0;
     const i = timed[k];
-    const top = s.tops[i] ?? 0;
-    const next = k + 1 < timed.length ? s.tops[timed[k + 1]] ?? top : top + (s.heights[i] || 40);
+    const at = midOf(i);
+    const next = k + 1 < timed.length ? midOf(timed[k + 1]) : at + (s.heights[i] || 40);
     const f = Math.min(1, Math.max(0, (b - starts[i]) / durs[i]));
-    return top + f * (next - top);
+    return at + f * (next - at);
   };
 
   const beatAtPos = (y) => {
     const { timed, starts, durs, total } = s.tl;
     for (let k = 0; k < timed.length; k++) {
       const i = timed[k];
-      const top = s.tops[i] ?? 0;
-      const next = k + 1 < timed.length ? s.tops[timed[k + 1]] ?? top : top + (s.heights[i] || 40);
-      if (y < next) return y <= top ? starts[i] : starts[i] + ((y - top) / Math.max(1, next - top)) * durs[i];
+      const at = midOf(i);
+      const next = k + 1 < timed.length ? midOf(timed[k + 1]) : at + (s.heights[i] || 40);
+      if (y < next) return y <= at ? starts[i] : starts[i] + ((y - at) / Math.max(1, next - at)) * durs[i];
     }
     return total;
   };
@@ -206,7 +224,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     return starts[i];
   };
 
-  // 今の読み位置(画面の上から3割)にある拍。いちばん上にいるときは曲の頭
+  // 今の読み位置(画面の真ん中)にある拍。いちばん上にいるときは曲の頭
   const beatFromScroll = () => {
     const el = scrollRef.current;
     if (!el || el.scrollTop < 4) return 0;
@@ -372,6 +390,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     if (live.current.clock) {
       // 録音: 止めたところから続ける(行を指定されたらその行の時刻から)
       measure();
+      stopGlide();
+      s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 500 };
       if (fromBeat != null) clockSeek(fromBeat);
       else if (s.loop) {
         const a = s.tl.starts[s.loop.from];
@@ -455,15 +475,17 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     setProgress(0);
   };
 
-  // 行へ移動(再生中はその行から続ける)
+  // 行へ移動(再生中はその行から続ける)。行は画面の真ん中へ
   const jumpToLine = (i) => {
     measure();
     const b = s.tl.starts[i] ?? 0;
     if (live.current.clock) {
-      if (s.playingFlag) clockSeek(b);
-      else {
+      if (s.playingFlag) {
+        s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
         clockSeek(b);
-        glideTo(scrollRef.current, (s.tops[i] ?? 0) - anchor());
+      } else {
+        clockSeek(b);
+        glideTo(scrollRef.current, midOf(i) - anchor());
       }
       return;
     }
@@ -477,7 +499,15 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       setBeat(b, 0.03);
       s.sched = b - 1;
       tickClicks();
-    } else glideTo(scrollRef.current, (s.tops[i] ?? 0) - anchor());
+    } else glideTo(scrollRef.current, midOf(i) - anchor());
+  };
+
+  // タップした行から流す: 止まっていれば、その行を画面の真ん中へ寄せながら流し始める。流していれば、その行へ移る
+  const startAt = (i) => {
+    measure();
+    if (s.tl.starts[i] == null || !s.tl.durs[i]) return;
+    if (s.playingFlag) jumpToLine(i);
+    else start(s.tl.starts[i]);
   };
 
   const step = (dir) => {
@@ -558,5 +588,5 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     if (s.held) releasePlayback();
   }, []);
 
-  return { playing, countdown, progress, toggle, start, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop };
+  return { playing, countdown, progress, toggle, start, startAt, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop };
 }

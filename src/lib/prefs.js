@@ -20,7 +20,7 @@ export const DEFAULT_PREFS = {
   clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
   showCurrent: false, // 流しているあいだ、今の行に色を付ける(標準はオフ。BPM の時計と実際の歌がずれて見えるため)
-  tapToTurn: true, // 譜面の何も無いところを押すと、画面を下へ送る
+  tapToStart: true, // 譜面の行(や行の横の空いたところ)を押すと、その行を画面の真ん中に寄せて、そこから流す
   appleCardDismissed: false,
   homeSort: 'recent', // recent | added | title
 };
@@ -36,6 +36,7 @@ function load() {
     if (!saved.v || saved.v < 2) delete saved.barsPerLine;
     // v3: 「かんたんコード」(標準オン)を「かんたんモード」(標準オフ)に作り替えたので、古い値は捨てる
     delete saved.simple;
+    delete saved.tapToTurn; // 「何も無いところを押して画面を送る」は「タップしたところから流す」に変えた
     // v4: 「今の行に色を付ける」の標準をオフにしたので、古い保存値は捨てる
     if (!saved.v || saved.v < 4) delete saved.showCurrent;
     return { ...DEFAULT_PREFS, ...saved, v: PREFS_VERSION };

@@ -98,7 +98,7 @@ async function onsetEnvelope(x, progress) {
   return out;
 }
 
-function estimateTempo(env) {
+function estimateTempo(env, center = 105) {
   const fps = SR / OH;
   const lo = Math.floor((60 / 200) * fps);
   const hi = Math.ceil((60 / 55) * fps);
@@ -113,7 +113,7 @@ function estimateTempo(env) {
   for (let L = lo; L <= hi; L++) {
     const bpm = (60 * fps) / L;
     // 105 前後をやや優先(16分のノリで倍のテンポに取りやすいのを防ぐ)
-    const w = Math.exp(-0.5 * (Math.log2(bpm / 105) / 0.8) ** 2);
+    const w = Math.exp(-0.5 * (Math.log2(bpm / center) / 0.8) ** 2);
     const v = ac[L] * w;
     if (v > bestV) {
       bestV = v;
@@ -126,7 +126,42 @@ function estimateTempo(env) {
   const c = ac[best + 1];
   const den = a - 2 * b + c;
   const period = den ? best + (0.5 * (a - c)) / den : best;
-  return { period, bpm: (60 * fps) / period };
+  // はっきりさ: 選んだ周期の自己相関が、範囲全体の平均の何倍か
+  let mean = 0;
+  for (let L = lo; L <= hi; L++) mean += ac[L];
+  mean /= hi - lo + 1;
+  return { period, bpm: (60 * fps) / period, conf: mean > 0 ? ac[best] / mean : 0 };
+}
+
+// 曲の音(11025Hz のモノラル)からテンポだけを測る(自動スクロールの速さ用。試聴30秒で十分)。
+// center: だいたいのテンポが分かっていれば、その近くを優先する
+export async function detectTempo(samples, { center = 105 } = {}) {
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
+  if (!peak) return null;
+  const x = new Float32Array(samples.length);
+  for (let i = 0; i < samples.length; i++) x[i] = (samples[i] / peak) * 0.9;
+  const env = await onsetEnvelope(x, () => {});
+  if (env.length < 200) return null;
+  const t = estimateTempo(env, center);
+  return { bpm: Math.round(t.bpm * 10) / 10, conf: Math.round(t.conf * 100) / 100 };
+}
+
+// 音のファイル(mp3・m4a など)を読み込む
+export async function decodeAudio(arrayBuffer) {
+  // 音を鳴らさない部品で読む(iPhone は鳴らす部品の数に上限があるため)。使えなければふつうの部品で
+  try {
+    const Off = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const off = new Off(1, 1, 44100);
+    return await new Promise((resolve, reject) => off.decodeAudioData(arrayBuffer.slice(0), resolve, reject));
+  } catch {}
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new Ctx();
+  try {
+    return await new Promise((resolve, reject) => ctx.decodeAudioData(arrayBuffer, resolve, reject));
+  } finally {
+    ctx.close?.().catch?.(() => {});
+  }
 }
 
 // Ellis(2007)の動的計画法: 立ち上がりの強いところを、だいたい一定の間隔でたどる
@@ -327,7 +362,9 @@ function beatFeatures(ch, beats) {
   return feats;
 }
 
-function scoreBeats(feats, T) {
+const TUNE = { rootW: 0.2, invW: 0.06, missPen: 0.05 };
+function scoreBeats(feats, T, tune = TUNE) {
+  const { rootW, invW, missPen } = { ...TUNE, ...tune };
   const med = [...feats.map((f) => f.e)].sort((a, b) => a - b)[feats.length >> 1] || 1;
   return feats.map((f) => {
     const quiet = f.e < med * 0.25;
@@ -341,9 +378,9 @@ function scoreBeats(feats, T) {
       let d = 0;
       for (let c = 0; c < 12; c++) d += f.tr[c] * tp.v[c];
       // 低音(ベース)はコードの根音を決める手がかり。根音なら大きく、3度・5度(転回形)なら少し加点
-      d += 0.2 * f.bs[tp.root] + 0.06 * Math.max(f.bs[mod12(tp.root + iv[1])], f.bs[mod12(tp.root + iv[2])]);
+      d += rootW * f.bs[tp.root] + invW * Math.max(f.bs[mod12(tp.root + iv[1])], f.bs[mod12(tp.root + iv[2])]);
       // いちばん強い低音がコードの音に入っていなければ減点
-      if (!iv.some((x) => mod12(tp.root + x) === top)) d -= 0.05;
+      if (!iv.some((x) => mod12(tp.root + x) === top)) d -= missPen;
       d += TYPES[tp.type].prior + keyPrior(tp.root, tp.type, T);
       s[i] = d;
     }
@@ -451,7 +488,7 @@ function keyFromPath(path, feats, pw = 0.15) {
 // ---------------------------------------------------------------- 全体
 
 // samples: 11025Hz のモノラル音。progress(0〜1, 今している作業)
-export async function analyzeAudio(samples, { progress = () => {}, keyWeight = 0.15 } = {}) {
+export async function analyzeAudio(samples, { progress = () => {}, keyWeight = 0.15, tune = TUNE } = {}) {
   // 音量をそろえる
   let peak = 0;
   for (let i = 0; i < samples.length; i++) peak = Math.max(peak, Math.abs(samples[i]));
@@ -475,9 +512,9 @@ export async function analyzeAudio(samples, { progress = () => {}, keyWeight = 0
   await tick();
   // 1回目: キーを気にせず並べる → キーを決める → 2回目: 小節の頭を探す → 3回目: 仕上げ
   const flat = (cost) => () => cost;
-  const p1 = viterbi(scoreBeats(feats, null), flat(0.12));
+  const p1 = viterbi(scoreBeats(feats, null, tune), flat(0.12));
   const key = keyFromPath(p1, feats, keyWeight);
-  const sc = scoreBeats(feats, key.T);
+  const sc = scoreBeats(feats, key.T, tune);
   const p2 = viterbi(sc, flat(0.12));
   // 拍子: コードの変わり目が「3拍ごと」と「4拍ごと」のどちらにそろっているか(そろい方 = いちばん多い位置の割合 × 拍数)
   const changes = [];

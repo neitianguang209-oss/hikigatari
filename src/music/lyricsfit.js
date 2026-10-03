@@ -63,6 +63,46 @@ export function makeWeights(ruby) {
   };
 }
 
+// 文字ごとの時刻がある歌詞(KRC): 時刻 → 行の中の文字の位置
+// marks: [{ p: 文字の位置, t: 歌い始め, e: 歌い終わり }](時間の順)。n: 行の文字数
+// ChordWiki の正解(10曲・1061か所)で確かめたところ、コードの文字がぴったり合うのは 71%(見積もりでは 34%)、1文字以内は 90%(同 73%)
+// ① その時刻の近く(少し前0.25秒〜少し後0.3秒)で歌い始める文字があれば、いちばん近い文字
+// ② ある文字を伸ばしている途中なら、歌い始めと歌い終わりの近いほう(前から伸ばしている音で変わるなら、その文字)
+// ③ 歌っていないところ(息つぎ・間奏)なら、次に歌い始める文字
+export function makeWordPos(marks, n) {
+  return (tc) => {
+    if (!marks.length) return 0;
+    let best = -1;
+    let bd = Infinity;
+    for (const m of marks) {
+      const d = m.t - tc;
+      if (d >= -0.25 && d <= 0.3 && Math.abs(d) < bd) {
+        bd = Math.abs(d);
+        best = m.p;
+      }
+    }
+    if (best >= 0) return best;
+    for (let k = 0; k < marks.length; k++) {
+      const m = marks[k];
+      if (tc >= m.t && tc < m.e) return tc - m.t <= m.e - tc ? m.p : k + 1 < marks.length ? marks[k + 1].p : n;
+    }
+    const k = marks.findIndex((m) => m.t > tc);
+    return k < 0 ? n : marks[k].p;
+  };
+}
+
+// 行の文字列と、文字ごとの時刻 words([{ t, d, s: 文字列 }]) → 文字の位置ごとの印
+function wordMarks(words) {
+  const marks = [];
+  let p = 0;
+  for (const w of words) {
+    const len = Array.from(w.s).length;
+    if (w.t != null && w.s.trim()) marks.push({ p: p + (Array.from(w.s).findIndex((c) => c.trim()) || 0), t: w.t, e: w.t + (w.d || 0) });
+    p += len;
+  }
+  return marks;
+}
+
 // 時刻 → 行の中の文字の位置(歌い始め s 〜 歌い終わり e の間を、文字の重みの割合で割り振る)
 function makePosOf(weights, s, e) {
   const cum = [0];
@@ -86,12 +126,13 @@ const median = (xs) => {
 };
 
 // r: analyzeAudio の結果 { key, bpm, bars: [{ t0, t1, chords }] }
-// lines: [{ t, text }](録音の時刻・秒)。text='' は歌の切れ目
+// lines: [{ t, text, words? }](録音の時刻・秒)。text='' は歌の切れ目。words: 文字ごとの時刻 [{ t, d, s }](KRC があるとき)
 // weights: 文字の重みを返す関数(makeWeights)。place: 耳で直した位置 { 'i:時刻': 文字の位置 }
+// partial: 曲の一部だけ(試聴30秒)。前奏・後奏の見出しを付けない
 // 戻り値: { text: 譜面, rows: 譜面の1行ずつ, used: 当てはめた行の数 }
 //   rows[k] = { kind: blank|label|chords|lyric, src, t0, t1, line? }
-//   line = { i, chars, weights, s, e, toks: [{ type: bar|chord, t, c?, pos, auto?, key? }] }(歌詞の行だけ)
-export function fitLyrics(r, lines, { note = '', weights = null, place = null } = {}) {
+//   line = { i, chars, weights, s, e, toks: [{ type: bar|chord, t, c?, pos, auto?, key? }], marks? }(歌詞の行だけ)
+export function fitLyrics(r, lines, { note = '', weights = null, place = null, partial = false } = {}) {
   const wOf = weights || ((chars) => chars.map(charWeight));
   const bars = r.bars;
   const nb = bars.length;
@@ -136,11 +177,12 @@ export function fitLyrics(r, lines, { note = '', weights = null, place = null } 
     const prev = sung[sung.length - 1];
     if (prev && prev.bar === b) {
       prev.text += ' ' + l.text;
+      prev.words = prev.words && l.words ? [...prev.words, { t: null, d: 0, s: ' ' }, ...l.words] : null;
       continue;
     }
     if (pendingBreak && sung.length) breaks.add(sung.length);
     pendingBreak = false;
-    sung.push({ t: l.t, text: l.text, bar: b });
+    sung.push({ t: l.t, text: l.text, bar: b, words: l.words ? [...l.words] : null });
   }
   if (!sung.length) return done(0);
 
@@ -172,22 +214,25 @@ export function fitLyrics(r, lines, { note = '', weights = null, place = null } 
     }
   };
 
-  chordRows(0, sung[0].bar, '前奏');
+  chordRows(0, sung[0].bar, partial ? '' : '前奏');
   sung.forEach((l, i) => {
     const next = sung[i + 1];
     const nextBar = next ? next.bar : nb;
     const chars = Array.from(l.text);
     const weights = wOf(chars);
     const mora = weights.reduce((a, b) => a + b, 0);
-    // 歌い終わり: 次の行の頭か、音の数から見積もった長さの短いほう
+    // 文字ごとの時刻(KRC)があれば、それでコードを置く文字を決める(見積もりではなく実際に歌っている文字)
+    const marks = l.words ? wordMarks(l.words) : null;
+    const timed = !!marks?.length;
+    // 歌い終わり: 文字ごとの時刻があればその最後。無ければ、次の行の頭か、音の数から見積もった長さの短いほう
     const guess = l.t + mora * rate * 1.15 + 0.6;
-    const e = Math.max(l.t + 0.5, Math.min(next ? next.t : end, guess));
+    const e = timed ? Math.max(l.t + 0.3, marks[marks.length - 1].e) : Math.max(l.t + 0.5, Math.min(next ? next.t : end, guess));
     let lastBar = Math.min(nextBar, barAt(e) + 1);
     // 次の行まで2小節以上あけば、そこは間奏(または後奏)としてコードだけの行にする
     if (nextBar - lastBar < 2) lastBar = nextBar;
     if (breaks.has(i)) emit('blank', '');
 
-    const posOf = makePosOf(weights, l.t, e);
+    const posOf = timed ? makeWordPos(marks, chars.length) : makePosOf(weights, l.t, e);
     const toks = [];
     let lastChord = null;
     for (let b = l.bar; b < lastBar; b++) {
@@ -209,8 +254,9 @@ export function fitLyrics(r, lines, { note = '', weights = null, place = null } 
     }
     // コードの変わらない小節の線は、次のコードより後ろに来ないように(耳で前へ動かしたコードを優先)
     for (let q = toks.length - 2; q >= 0; q--) if (toks[q].type === 'bar') toks[q].pos = Math.min(toks[q].pos, toks[q + 1].pos);
-    // 行の最初の小節線はいつも行の頭に(小節線の前に歌い出しの文字が来ると、小節の数が1つ多く数えられて自動スクロールがずれる)
-    toks[0].pos = 0;
+    // 行の最初の小節線: 文字ごとの時刻があれば、小節の頭より前に歌い出す文字(「何十|回の夜」の「何十」)はそのまま前に出す
+    // (小節線より前のコードの無い文字は小節に数えないので、自動スクロールの長さは変わらない)。見積もりのときは行の頭に
+    if (!timed) toks[0].pos = 0;
     // 時間の順に、位置が戻らないようにそろえる
     let p = 0;
     for (const tk of toks) p = tk.pos = Math.max(p, tk.pos);
@@ -220,9 +266,16 @@ export function fitLyrics(r, lines, { note = '', weights = null, place = null } 
       while (k < toks.length && toks[k].pos <= c) s += toks[k].type === 'bar' ? '|' : `[${toks[k].c}]`, k++;
       if (c < chars.length) s += chars[c];
     }
-    emit('lyric', s, bars[l.bar].t0, bars[lastBar - 1].t1, { i, chars, weights, s: l.t, e, toks });
+    // 譜面を読み直したときの小節の数が、聴き取った小節の数とぴったり同じになるように整える(自動スクロールが曲とずれないように)
+    // ・最後の小節に歌詞もコードの変わり目も無い(歌い終わって伸ばしているだけ)と行が「|」で終わるが、
+    //   行の終わりの「|」は閉じ線として数えないので、その小節のコードを書いておく
+    // ・1小節だけの行は小節線が1本になり、見積もりに回されてしまうので、閉じ線を足す
+    const nBars = lastBar - l.bar;
+    if (s.endsWith('|') && lastChord) s += `[${lastChord}]`;
+    if (nBars === 1) s += '|';
+    emit('lyric', s, bars[l.bar].t0, bars[lastBar - 1].t1, { i, chars, weights, s: l.t, e, toks, marks });
 
-    if (lastBar < nextBar) chordRows(lastBar, nextBar, next ? (nextBar - lastBar >= 4 ? '間奏' : '') : '後奏');
+    if (lastBar < nextBar) chordRows(lastBar, nextBar, next ? (nextBar - lastBar >= 4 ? '間奏' : '') : partial ? '' : '後奏');
   });
   return done(sung.length);
 }

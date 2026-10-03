@@ -383,6 +383,71 @@ async function lyricsFromUrl(raw: string) {
   return { lines: brLines(best).map((t) => (t ? [{ t }] : [])), source: name, url: u.toString() };
 }
 
+// ---------------------------------------------------------------- 文字ごとの時刻つき歌詞(Kugou の KRC)
+// 耳コピで、コードを「どの文字の上に置くか」を正確に決めるのに使う(歌詞の1文字ずつに、歌い始める時刻と長さがある)。
+// 戻り値の行: { t: 歌い始め(秒), w: [[時刻(秒), 長さ(秒), 文字], ...] }。時刻は元の曲の頭から
+const KRC_KEY = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
+// 作詞・作曲などの行(歌詞ではない)
+const KRC_CREDIT = /^[^\s]{0,8}\s*[:：]|^(TME|腾讯|酷狗|未经|本歌词|纯音乐|製作|制作人)/;
+
+async function krcSearch(keyword: string, durationMs: number) {
+  const r = await fetch(
+    `http://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword=${encodeURIComponent(keyword)}&duration=${durationMs || ''}&hash=`,
+    { headers: { 'User-Agent': UA_DESKTOP }, signal: AbortSignal.timeout(6000) },
+  );
+  if (!r.ok) return [];
+  // deno-lint-ignore no-explicit-any
+  const j: any = await r.json().catch(() => ({}));
+  return Array.isArray(j.candidates) ? j.candidates : [];
+}
+
+async function krcLyrics(title: string, artist: string, durationMs: number) {
+  const t = baseTitle(title);
+  if (!t) return null;
+  let cands = await krcSearch(artist ? `${artist} - ${t}` : t, durationMs);
+  if (!cands.length && artist) cands = await krcSearch(t, durationMs);
+  // deno-lint-ignore no-explicit-any
+  const ok = (c: any, needArtist: boolean) =>
+    fold(baseTitle(String(c.song || ''))) === fold(t) &&
+    (!needArtist || !artist || sameArtist(String(c.singer || ''), artist)) &&
+    (!durationMs || !c.duration || Math.abs(Number(c.duration) - durationMs) < (needArtist ? 10000 : 3000));
+  // アーティスト名が中国語表記のこともあるので、合わなければ曲名と曲の長さがほぼ同じものでよい
+  const c = cands.find((x: unknown) => ok(x, true)) ?? cands.find((x: unknown) => ok(x, false));
+  if (!c) return null;
+  const r = await fetch(
+    `http://lyrics.kugou.com/download?ver=1&client=pc&id=${encodeURIComponent(c.id)}&accesskey=${encodeURIComponent(c.accesskey)}&fmt=krc&charset=utf8`,
+    { headers: { 'User-Agent': UA_DESKTOP }, signal: AbortSignal.timeout(6000) },
+  );
+  // deno-lint-ignore no-explicit-any
+  const j: any = await r.json().catch(() => ({}));
+  if (!j.content) return null;
+  // base64 → 先頭4バイト("krc1")を外す → 鍵で XOR → zlib をほどく
+  const raw = Uint8Array.from(atob(j.content), (ch) => ch.charCodeAt(0)).slice(4);
+  for (let i = 0; i < raw.length; i++) raw[i] ^= KRC_KEY[i % 16];
+  const text = await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate'))).text();
+  let offset = 0;
+  const lines: { t: number; w: [number, number, string][] }[] = [];
+  for (const row of text.replace(/^\s+/, '').split(/\r?\n/)) {
+    const off = row.match(/^\[offset:\s*(-?\d+)\]/);
+    if (off) offset = Number(off[1]) / 1000;
+    const m = row.match(/^\[(\d+),(\d+)\](.*)$/);
+    if (!m) continue;
+    const start = Number(m[1]) / 1000;
+    const w: [number, number, string][] = [];
+    for (const x of m[3].matchAll(/<(\d+),(\d+),\d+>([^<]*)/g)) {
+      if (!x[3]) continue;
+      w.push([Math.round((start + Number(x[1]) / 1000 + offset) * 1000) / 1000, Number(x[2]) / 1000, x[3]]);
+    }
+    const s = w.map((x) => x[2]).join('').trim();
+    if (!s || !w.length) continue;
+    // 先頭の「曲名 - アーティスト」「作詞：」などは歌詞ではない
+    if (KRC_CREDIT.test(s) || (lines.length === 0 && / - /.test(s) && fold(s).includes(fold(t)))) continue;
+    lines.push({ t: w[0][0], w });
+  }
+  if (lines.length < 3) return null;
+  return { lines, source: 'Kugou', id: String(c.id) };
+}
+
 async function utanetSheet(id: string) {
   if (!/^\d+$/.test(id)) throw new HttpError(400, 'bad id');
   const html = await get(`https://www.uta-net.com/chord/${id}/`);
@@ -1065,6 +1130,8 @@ Deno.serve(async (req) => {
         return json((await utatenLyrics(String(body.title || ''), String(body.artist || '')).catch(() => null)) ?? { lines: [] });
       case 'lyrics_url':
         return json(await lyricsFromUrl(String(body.url || '')));
+      case 'lyrics_krc':
+        return json((await krcLyrics(String(body.title || ''), String(body.artist || ''), Number(body.durationMs) || 0).catch(() => null)) ?? { lines: [] });
       case 'sheet': {
         const s = await getSheet(String(body.source), String(body.id), String(body.title || ''), String(body.artist || ''), !!body.force);
         return json(s);

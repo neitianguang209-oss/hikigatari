@@ -4,11 +4,30 @@
 let ctx = null;
 let holders = 0;
 let keepAlive = null;
+let capturing = 0; // マイクを使っている数(チューナー・耳コピ)
 
 export function audioCtx() {
-  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (ctx.state === 'suspended') ctx.resume().catch?.(() => {});
+  if (!ctx || ctx.state === 'closed') ctx = new (window.AudioContext || window.webkitAudioContext)();
+  // iPhone は電話・ほかのアプリの音で 'interrupted' になることがある。そのときも動かし直す
+  if (ctx.state === 'suspended' || ctx.state === 'interrupted') ctx.resume().catch?.(() => {});
   return ctx;
+}
+
+// iPhone の音の扱い(audioSession)を、いまの状況に合わせる。
+// マイクを使っている間は「録音と再生」。ここを「再生だけ」にするとマイクの音が届かなくなる
+function applySession() {
+  try {
+    if (!navigator.audioSession) return;
+    navigator.audioSession.type = capturing ? 'play-and-record' : holders ? 'playback' : 'auto';
+  } catch {}
+}
+export function beginCapture() {
+  capturing++;
+  applySession();
+}
+export function endCapture() {
+  capturing = Math.max(0, capturing - 1);
+  applySession();
 }
 
 // 無音の短い音声(古い iPhone 向け: これを流し続けると、効果音も「再生中の音」として鳴る)
@@ -38,7 +57,7 @@ function silentUrl() {
 export function holdPlayback() {
   holders++;
   try {
-    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+    if (navigator.audioSession) applySession();
     else {
       if (!keepAlive) {
         keepAlive = new Audio(silentUrl());
@@ -54,7 +73,7 @@ export function releasePlayback() {
   holders = Math.max(0, holders - 1);
   if (holders) return;
   try {
-    if (navigator.audioSession) navigator.audioSession.type = 'auto';
+    applySession();
     keepAlive?.pause();
   } catch {}
 }

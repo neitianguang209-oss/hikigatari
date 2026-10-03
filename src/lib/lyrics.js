@@ -23,12 +23,40 @@ export function rubyOf(lines) {
   return m;
 }
 
-// 戻り値: { synced: [{t, text}] | null, plain: [行](空行は段落の切れ目), source, ruby: Map } | null
+// 文字ごとの時刻つき歌詞(Kugou の KRC。サーバー経由) → synced の形 [{ t, text, words: [{ t, d, s }] }]
+// 行と行のあいだが4秒以上あいたところ(間奏など)には、段落の切れ目(text='')を入れる
+export function krcToSynced(lines) {
+  const out = [];
+  for (const l of lines || []) {
+    const words = (l.w || []).map(([t, d, s]) => ({ t, d, s: String(s) }));
+    // 行の前後の空白は落とす(文字の位置がずれないよう、words の文字列もいっしょに)
+    while (words.length && !words[0].s.trim()) words.shift();
+    while (words.length && !words[words.length - 1].s.trim()) words.pop();
+    if (!words.length) continue;
+    words[0].s = words[0].s.replace(/^\s+/, '');
+    words[words.length - 1].s = words[words.length - 1].s.replace(/\s+$/, '');
+    const text = words.map((w) => w.s).join('');
+    const prev = out[out.length - 1];
+    if (prev?.words) {
+      const pw = prev.words[prev.words.length - 1];
+      if (words[0].t - (pw.t + pw.d) >= 4) out.push({ t: pw.t + pw.d + 0.3, text: '' });
+    }
+    out.push({ t: words[0].t, text, words });
+  }
+  return out;
+}
+
+const KANA = /[ぁ-ゖァ-ヺ]/g;
+const kanaRate = (s) => ((s || '').match(KANA) || []).length / Math.max(1, (s || '').replace(/\s/g, '').length);
+
+// 戻り値: { synced: [{t, text, words?}] | null, plain: [行](空行は段落の切れ目), source, ruby: Map, wordTimed } | null
+// 探す順: 文字ごとの時刻つき(Kugou) → 行ごとの時刻つき(LRCLIB) → 時刻なし(UtaTen・歌ネット)
 export async function findLyrics({ title, artist, durationMs }) {
   const t = baseTitle(title || '').trim();
   if (!t) return null;
   const dur = durationMs ? durationMs / 1000 : null;
   const utaten = api('lyrics_utaten', { title: t, artist: artist || '' }).catch(() => null);
+  const krc = api('lyrics_krc', { title: t, artist: artist || '', durationMs: durationMs || 0 }).catch(() => null);
   let found = null;
   try {
     let list = await lrclib(artist ? { track_name: t, artist_name: artist } : { track_name: t });
@@ -48,6 +76,16 @@ export async function findLyrics({ title, artist, durationMs }) {
   } catch {}
   const ut = await utaten;
   const ruby = rubyOf(ut?.lines);
+  // 文字ごとの時刻つきがあれば、それを使う(ただし日本語の曲なのに、かなの無い歌詞(訳詞など)なら使わない)
+  const k = await krc;
+  if (k?.lines?.length >= 3) {
+    const synced = krcToSynced(k.lines);
+    const kText = synced.map((l) => l.text).join('');
+    const ref = found ? found.plain.join('') : ut?.lines ? ut.lines.map(lineText).join('') : '';
+    if (synced.some((l) => l.text) && !(kanaRate(ref) > 0.15 && kanaRate(kText) < 0.03)) {
+      return { synced, plain: tidy(synced.map((l) => l.text)), source: 'Kugou', ruby, wordTimed: true };
+    }
+  }
   if (found) return { ...found, ruby };
   if (ut?.lines?.some((l) => lineText(l))) return { synced: null, plain: tidy(ut.lines.map(lineText)), source: 'UtaTen', ruby };
   try {
