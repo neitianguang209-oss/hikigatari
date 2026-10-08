@@ -104,7 +104,7 @@ function wordMarks(words) {
 }
 
 // 時刻 → 行の中の文字の位置(歌い始め s 〜 歌い終わり e の間を、文字の重みの割合で割り振る)
-function makePosOf(weights, s, e) {
+export function makePosOf(weights, s, e) {
   const cum = [0];
   for (const x of weights) cum.push(cum[cum.length - 1] + x);
   const n = weights.length;

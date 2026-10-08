@@ -60,7 +60,7 @@ export function debounce(fn, ms) {
 }
 
 export function sourceName(src) {
-  return { ufret: 'U-FRET', chordwiki: 'ChordWiki', utanet: '歌ネット', manual: '自分で入力', ear: '耳コピ' }[src] || src || '';
+  return { ufret: 'U-FRET', chordwiki: 'ChordWiki', utanet: '歌ネット', mcmemo: 'コード進行メモ倉庫', rinne: 'リンネ', jtotal: 'J-Total', manual: '自分で入力', ear: '耳コピ' }[src] || src || '';
 }
 
 export function formatAgo(ms) {

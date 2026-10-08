@@ -6,6 +6,8 @@ import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast }
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
 import { useAutoScroll, glideTo, glideHeading, timelineBeats } from './autoscroll.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
+import { sheetFromFetched } from '../music/sources.js';
+import { krcToSynced } from '../lib/lyrics.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
@@ -35,10 +37,14 @@ export function SongPage({ id }) {
       setState({ loading: true, error: null });
       try {
         const r = await api('sheet', { source: cur.source, id: cur.sourceId, title: cur.title, artist: cur.artist, force });
-        const parsed = parseSheet(r.text);
+        // サイトごとの書き方(カポつきの形・コードの行+歌詞の行・コードの時刻つきデータ)を、ふつうの譜面にそろえる
+        const conv = await sheetFromFetched(r, {
+          krc: async () => krcToSynced((await api('lyrics_krc', { title: cur.title, artist: cur.artist || '', durationMs: cur.durationMs || 0 })).lines),
+        });
+        const parsed = parseSheet(conv.text);
         if (!parsed.lines.some((l) => l.segs && l.segs.some((s) => s.c))) throw Object.assign(new Error('譜面にコードが見つかりませんでした'), { status: 404 });
         await lib.patch(id, {
-          sheet: { text: r.text, key: r.key || parsed.meta.key || null, bpm: r.bpm || parsed.meta.bpm || null, beatsPerBar: parsed.meta.beatsPerBar || 4, fetchedAt: r.fetchedAt || new Date().toISOString() },
+          sheet: { text: conv.text, key: conv.key || parsed.meta.key || null, bpm: conv.bpm || parsed.meta.bpm || null, beatsPerBar: parsed.meta.beatsPerBar || 4, fetchedAt: r.fetchedAt || new Date().toISOString() },
           sourceUrl: r.url || cur.sourceUrl,
           edited: false,
         });

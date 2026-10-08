@@ -448,6 +448,246 @@ async function krcLyrics(title: string, artist: string, durationMs: number) {
   return { lines, source: 'Kugou', id: String(c.id) };
 }
 
+// ---------------------------------------------------------------- コード進行メモ倉庫(music-chord.com)
+// 新曲が多い。曲の一覧(page-data/search、約2600曲・曲名のかなつき)を6時間ごとに1回だけ読んで、手元で照合する。
+// 曲のデータは、行ごとの歌詞と、コード(キーからの度数)とその鳴る時刻(YouTube の動画の時刻)。
+// 譜面の形にするのは端末側(歌詞の1文字ずつの時刻と合わせて、コードを文字の上に置くため)
+type McNode = { slug: string; title: string; kana?: string; subtitle?: string; artists?: string[]; artist_kana?: string; youtubeVideoId?: string };
+let mcMem: { at: number; list: McNode[] } | null = null;
+const MC_TTL_MS = 6 * 3600e3;
+
+async function mcList(): Promise<McNode[]> {
+  if (mcMem && Date.now() - mcMem.at < MC_TTL_MS) return mcMem.list;
+  const cached = await cacheGet('mcindex1', MC_TTL_MS);
+  if (Array.isArray(cached)) {
+    mcMem = { at: Date.now(), list: cached };
+    return cached;
+  }
+  const r = await fetch('https://music-chord.com/page-data/search/page-data.json', {
+    headers: { 'User-Agent': UA_DESKTOP },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!r.ok) throw new HttpError(502, `取得失敗 HTTP ${r.status}`);
+  // deno-lint-ignore no-explicit-any
+  const j: any = await r.json();
+  const list: McNode[] = (j?.result?.data?.allChordsJson?.edges ?? [])
+    // deno-lint-ignore no-explicit-any
+    .map((e: any) => e?.node)
+    .filter((n: McNode) => n?.slug && n?.title)
+    .map((n: McNode) => ({ slug: n.slug, title: n.title, kana: n.kana || '', subtitle: n.subtitle || '', artists: n.artists || [], artist_kana: n.artist_kana || '', youtubeVideoId: n.youtubeVideoId || '' }));
+  mcMem = { at: Date.now(), list };
+  bg(cachePut('mcindex1', list));
+  return list;
+}
+
+function mcHit(n: McNode): Hit {
+  return { source: 'mcmemo', id: n.slug, title: n.title, artist: (n.artists || []).join('・'), url: `https://music-chord.com/songs/${encodeURIComponent(n.slug)}/` };
+}
+
+// 曲名(版の表記を除く・かなでも)が同じ曲
+function mcByTitle(list: McNode[], title: string): Hit[] {
+  const t = fold(baseTitle(title));
+  if (!t) return [];
+  return list.filter((n) => fold(baseTitle(n.title)) === t || (n.kana && fold(n.kana) === t)).map(mcHit);
+}
+
+async function mcSheet(slug: string) {
+  const r = await fetch(`https://music-chord.com/page-data/songs/${encodeURIComponent(slug)}/page-data.json`, {
+    headers: { 'User-Agent': UA_DESKTOP },
+    signal: AbortSignal.timeout(9000),
+  });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new HttpError(502, `取得失敗 HTTP ${r.status}`);
+  // deno-lint-ignore no-explicit-any
+  const j: any = await r.json();
+  const c = j?.result?.data?.chordsJson;
+  if (!c?.sections?.length) return null;
+  const mc = { bpm: c.bpm ?? null, isPartial: c.isPartial ?? null, timeOffset: c.timeOffset ?? null, youtubeVideoId: c.youtubeVideoId ?? null, sections: c.sections };
+  return {
+    text: '',
+    mc,
+    bpm: c.bpm || null,
+    key: c.sections.find((s: { key?: string }) => s.key)?.key || null,
+    title: c.title || '',
+    artist: (c.artists || []).join('・'),
+    url: `https://music-chord.com/songs/${encodeURIComponent(slug)}/`,
+  };
+}
+
+// ---------------------------------------------------------------- リンネのコードブック(chord-rinne.jp)
+// 譜面は表: 1行 = コードのマス8つ(1マス1拍・2小節)と、その下の歌詞のマス。コードの位置と小節がそのまま分かる。
+// コードは「おすすめのカポ(★)」の形で書かれているので、カポの数を返して端末側で実際に鳴る音にずらす
+
+const RINNE = 'https://www.chord-rinne.jp/';
+const RINNE_SECTIONS: Record<string, string> = {
+  intro: 'イントロ',
+  amero: 'Aメロ',
+  bmero: 'Bメロ',
+  cmero: 'Cメロ',
+  dmero: 'Dメロ',
+  sabi: 'サビ',
+  inter: '間奏',
+  outro: 'アウトロ',
+  solo: 'ソロ',
+};
+
+async function rinneSearch(q: string): Promise<Hit[]> {
+  return rinneList(await get(`${RINNE}search_result.php?userserch=${encodeURIComponent(q)}`, { timeout: 7000 }));
+}
+
+// 検索結果・アーティストの曲一覧に共通の曲の並び(横のランキングも同じ形なので、呼ぶ側で曲名・アーティストを確かめる)
+function rinneList(html: string): Hit[] {
+  const out: Hit[] = [];
+  const re = /<a href='scode\.php\?id=(\d+)' id='song_link'>([\s\S]*?)<\/a>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    if (out.some((h) => h.id === m![1])) continue;
+    const title = stripTags((m[2].match(/<strong>([\s\S]*?)<\/strong>/)?.[1] ?? '').replace(/<span id='juni'>[\s\S]*?<\/span>/, '')).trim();
+    const artist = stripTags(m[2].match(/id='artlabel'>([\s\S]*?)<\/span>/)?.[1] ?? '').trim();
+    if (title) out.push({ source: 'rinne', id: m[1], title, artist, url: `${RINNE}scode.php?id=${m[1]}` });
+  }
+  return out;
+}
+
+async function rinneSheet(id: string) {
+  if (!/^\d+$/.test(id)) throw new HttpError(400, 'bad id');
+  const html = await get(`${RINNE}scode.php?id=${id}`);
+  const title = stripTags(html.match(/id="bodytitle">([\s\S]*?)<\/p>/)?.[1] ?? '').trim();
+  const artist = stripTags(html.match(/class="artist">([\s\S]*?)<\/a>/)?.[1] ?? '').trim();
+  // 表示中のカポ(選ばれている位置。「＋２ ( Capo ２ ) ★」「０ ( No Capo )」「－１ (半音下げ)」)
+  const sel = html.match(/id="key_selectbox"[\s\S]*?<\/select>/)?.[0] ?? '';
+  const opt = (sel.match(/selected>\s*([^<]*)/)?.[1] ?? '').normalize('NFKC');
+  const cm = opt.match(/^\s*([+-]?)\s*(\d+)/);
+  const capo = cm ? (cm[1] === '-' ? -1 : 1) * Number(cm[2]) : 0;
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map((x) => x[1]);
+  const lines: string[] = [];
+  let cur = '';
+  for (let r = 0; r < rows.length; r++) {
+    if (!/src="daia\//.test(rows[r])) continue;
+    const chordCells = [...rows[r].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => c[1].match(/alt="([^"]*)"/)?.[1] ?? '');
+    const next = rows[r + 1] && !/src="daia\//.test(rows[r + 1]) ? rows[r + 1] : '';
+    if (next) r++;
+    const lyricRaw = next ? [...next.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((c) => c[1]) : [];
+    const n = chordCells.length;
+    if (!n) continue;
+    // 段落の見出し(Aメロ・サビ などの画像)
+    const sec = (lyricRaw.join('') + rows[r]).match(/section\/([a-z]+)\d*\.png/)?.[1];
+    if (sec) {
+      if (lines.length && lines[lines.length - 1] !== '') lines.push('');
+      lines.push(`{c:${RINNE_SECTIONS[sec] ?? sec}}`);
+    }
+    const texts = lyricRaw.map((c) =>
+      stripTags(c.replace(/<rt>[\s\S]*?<\/rt>/g, '').replace(/<img[^>]*>/g, ''))
+        .replace(/[(（][ぁ-ゖー]+[)）]/g, '') // 前の行から続くふりがなの残り「(ろ)」
+        .replace(/[\s　]+/g, ' ')
+        .trim()
+    );
+    const hasText = texts.some(Boolean);
+    const bpb = n % 4 === 0 ? 4 : n % 3 === 0 ? 3 : n;
+    let s = '';
+    for (let k = 0; k < n; k++) {
+      if (k % bpb === 0) s += '|';
+      const c = chordCells[k];
+      if (c && c !== 'N') {
+        cur = c === 'NC' ? 'N.C.' : c;
+        s += `[${cur}]`;
+      }
+      if (hasText) s += texts[k] ?? '';
+      else if (c && c !== 'N') s += ' ';
+    }
+    // 最後の小節が空(歌詞もコードも無い)だと行が「|」で終わり、小節を1つ少なく数えてしまうので、続いているコードを書く
+    if (s.endsWith('|')) s += cur ? `[${cur}]` : ' ';
+    else if (!hasText) s += '|';
+    lines.push(s);
+  }
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  if (!lines.some((l) => l.includes('['))) return null;
+  return { text: lines.join('\n'), capo, bpm: null, key: null, title, artist, url: `${RINNE}scode.php?id=${id}` };
+}
+
+// ---------------------------------------------------------------- J-Total Music(music.j-total.net)
+// 老舗で曲数が多い。ページは Shift_JIS。譜面は「コードの行 + 歌詞の行」を文字の幅でそろえた形(端末側で [C]歌詞 に直す)。
+// コードは「Play」のキー(カポをつけた形)で書かれているので、カポの数を返す
+
+const JT = 'https://music.j-total.net/';
+let sjisMap: Map<string, string> | null = null;
+// 検索語を Shift_JIS の URL エンコードにする(TextEncoder は UTF-8 しか作れないので、読み取り表から逆引きを作る)
+function sjisEncode(s: string) {
+  if (!sjisMap) {
+    sjisMap = new Map();
+    const dec = new TextDecoder('shift_jis');
+    const hx = (n: number) => '%' + n.toString(16).toUpperCase().padStart(2, '0');
+    for (let hi = 0x81; hi <= 0xfc; hi++) {
+      if (hi >= 0xa0 && hi <= 0xdf) continue;
+      for (let lo = 0x40; lo <= 0xfc; lo++) {
+        if (lo === 0x7f) continue;
+        const ch = dec.decode(new Uint8Array([hi, lo]));
+        if (ch.length === 1 && ch.charCodeAt(0) !== 0xfffd && !sjisMap.has(ch)) sjisMap.set(ch, hx(hi) + hx(lo));
+      }
+    }
+    for (let x = 0xa1; x <= 0xdf; x++) sjisMap.set(dec.decode(new Uint8Array([x])), hx(x));
+  }
+  let out = '';
+  for (const ch of s) {
+    if (/[A-Za-z0-9\-_.~]/.test(ch)) out += ch;
+    else if (ch === ' ') out += '+';
+    else if (ch.charCodeAt(0) < 0x80) out += encodeURIComponent(ch);
+    else out += sjisMap.get(ch) ?? '';
+  }
+  return out;
+}
+
+async function getSjis(url: string, timeout = 9000) {
+  const r = await fetch(url, { headers: { 'User-Agent': UA_DESKTOP, 'Accept-Language': 'ja' }, signal: AbortSignal.timeout(timeout) });
+  if (!r.ok) throw new HttpError(r.status === 404 ? 404 : 502, `取得失敗 HTTP ${r.status}`);
+  return new TextDecoder('shift_jis').decode(new Uint8Array(await r.arrayBuffer()));
+}
+
+async function jtSearch(q: string): Promise<Hit[]> {
+  const html = await getSjis(`${JT}db/search.cgi?mode=search&word=${sjisEncode(q)}&method=and&sort=ac_new&page=1`, 7000);
+  const out: Hit[] = [];
+  const re = /href="(?:https:)?\/\/music\.j-total\.net\/data\/([0-9a-z]+\/[0-9A-Za-z_]+\/\d+(?:-e)?)\.html" target=""><font size="3"><b>([\s\S]*?)<\/b>[\s\S]*?歌：([^/<]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    if (out.some((h) => h.id === m![1])) continue;
+    const easy = m[1].endsWith('-e');
+    out.push({
+      source: 'jtotal',
+      id: m[1],
+      title: stripTags(m[2]).replace(/[〜～]初心者向け簡単コードVer\.[〜～]/, '').trim(),
+      artist: stripTags(m[3]).trim(),
+      url: `${JT}data/${m[1]}.html`,
+      badges: easy ? ['初心者ver'] : [],
+    });
+  }
+  return out;
+}
+
+async function jtSheet(path: string) {
+  if (!/^[0-9a-z]+\/[0-9A-Za-z_]+\/\d+(-e)?$/.test(path)) throw new HttpError(400, 'bad id');
+  const html = await getSjis(`${JT}data/${path}.html`);
+  const body = html.match(/<!--HPSTART-->([\s\S]*?)<!--HPEND-->/)?.[1];
+  if (!body) return null;
+  // 表示どおりに: 半角の空白・改行は1つにまとめ(全角の空白は位置合わせなので残す)、<br> で行を分ける
+  const text = decodeEntities(
+    body
+      .replace(/<a [^>]*>([\s\S]*?)<\/a>/g, '$1')
+      .replace(/[ \t\r\n]+/g, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  )
+    .split('\n')
+    .map((l) => l.replace(/^ +/, '').replace(/\s+$/, ''))
+    .filter((l) => !/はこちら/.test(l));
+  while (text.length && !text[0].trim()) text.shift();
+  const flat = stripTags(html).normalize('NFKC');
+  const key = flat.match(/Original Key\s*[:：]\s*([A-G][#♯b♭]?m?)/)?.[1] ?? null;
+  const capo = Number(flat.match(/Capo\s*[:：]\s*(\d+)/)?.[1] ?? 0);
+  const artist = (flat.match(/歌\s*[:：]\s*([^/\n]*)/)?.[1] ?? '').trim();
+  const title = stripTags(html.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? '').split(/[（(]/)[0].trim();
+  return { text: text.join('\n'), format: 'plain', capo, key, bpm: null, title, artist, url: `${JT}data/${path}.html` };
+}
+
 async function utanetSheet(id: string) {
   if (!/^\d+$/.test(id)) throw new HttpError(400, 'bad id');
   const html = await get(`https://www.uta-net.com/chord/${id}/`);
@@ -584,6 +824,9 @@ async function getSheet(source: string, id: string, title: string, artist: strin
   if (source === 'ufret') r = await ufretSheet(id);
   else if (source === 'chordwiki') r = await chordwikiSheet(id);
   else if (source === 'utanet') r = await utanetSheet(id);
+  else if (source === 'mcmemo') r = await mcSheet(id);
+  else if (source === 'rinne') r = await rinneSheet(id);
+  else if (source === 'jtotal') r = await jtSheet(id);
   else throw new HttpError(400, 'unknown source');
   if (!r) throw new HttpError(404, 'このサイトにはこの曲の譜面がありませんでした');
   // 呼び出し側(検索結果)が曲名・アーティストを知っていればそちらを優先する
@@ -664,7 +907,7 @@ function formHit(forms: string[], text: string) {
 async function search(qRaw: string) {
   const q = qRaw.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!q) return { groups: [] };
-  const ck = 'search4:' + fold(q);
+  const ck = 'search5:' + fold(q);
   const cached = await cacheGet(ck, SEARCH_TTL_MS);
   if (cached) return cached;
 
@@ -687,6 +930,9 @@ async function search(qRaw: string) {
     unFor(q);
     cwFor(q);
   }
+
+  // コード進行メモ倉庫の曲の一覧(6時間ごとに1回だけ読む)
+  const mcP = mcList().catch(() => [] as McNode[]);
 
   // 1) 単語ごとの候補(かな→漢字・英字)・U-FRET・iTunes(そのまま)・アーティスト名を同時に引く
   const itRawP = itunes(q).catch(() => [] as Cand[]);
@@ -753,13 +999,34 @@ async function search(qRaw: string) {
   if (fold(conv) !== fold(q)) ufQueries.push(conv);
   if (!cands.length && !ufRaw.length && fold(probeTitles[0]) !== fold(q)) ufQueries.push(probeTitles[0]);
 
-  const [unLists, cwList, ufExtra] = await Promise.all([
+  const [unLists, cwList, ufExtra, rnLists, jtLists, mcAll] = await Promise.all([
     Promise.all(probeTitles.map(unFor)),
     Promise.all(probeTitles.map(cwFor)),
     Promise.all([...new Set(ufQueries)].slice(0, 3).map((x) => ufretSearch(x).catch(() => [] as Hit[]))),
+    // リンネ・J-Total は曲名で引く(上位2つの曲名だけ。待ち時間を増やさないため)
+    Promise.all(probeTitles.slice(0, 2).map((t) => rinneSearch(t).catch(() => [] as Hit[]))),
+    Promise.all(probeTitles.slice(0, 2).map((t) => jtSearch(t).catch(() => [] as Hit[]))),
+    mcP,
   ]);
   const uf = [...ufRaw];
   for (const list of ufExtra) for (const h of list) if (!uf.some((u) => u.id === h.id)) uf.push(h);
+  // 曲名が探した曲名のどれかと同じか、検索語が全部当たるものだけ(「Lemon」で「NOMELON NOLEMON」の曲が出ないように)
+  const titleOk = (h: Hit) => probeTitles.some((t) => fold(baseTitle(h.title)) === fold(baseTitle(t))) || rel(h.title, h.artist).all;
+  const uniq = (lists: Hit[][]) => {
+    const out: Hit[] = [];
+    for (const l of lists) for (const h of l) if (titleOk(h) && !out.some((x) => x.id === h.id)) out.push(h);
+    return out;
+  };
+  const rn = uniq(rnLists);
+  const jt = uniq(jtLists);
+  // コード進行メモ倉庫: 曲名で引いたものと、検索語(かな・アーティスト名も)が全部当たるもの
+  const mc: Hit[] = [];
+  for (const t of probeTitles) for (const h of mcByTitle(mcAll, t)) if (!mc.some((x) => x.id === h.id)) mc.push(h);
+  for (const n of mcAll) {
+    if (mc.length >= 12) break;
+    const hay = `${n.title} ${(n.artists || []).join(' ')} ${n.kana || ''} ${n.artist_kana || ''}`;
+    if (words.every((w) => formHit(w.forms, hay)) && !mc.some((x) => x.id === n.slug)) mc.push(mcHit(n));
+  }
 
   // 人気度: 歌ネットの人気順リストでの順位(同じ曲名の中での並び)と、閲覧数の王冠
   const pop = new Map<string, number>();
@@ -824,6 +1091,11 @@ async function search(qRaw: string) {
     if (!r) continue;
     add(r.s.title || r.t, r.s.artist || '', { source: 'chordwiki', id: r.t, label: '', url: r.s.url, bpm: r.s.bpm, key: r.s.key });
   }
+  for (const h of mc) add(h.title, h.artist, { source: 'mcmemo', id: h.id, label: '', url: h.url });
+  for (const h of rn) add(h.title, h.artist, { source: 'rinne', id: h.id, label: '', url: h.url });
+  for (const h of [...jt].sort((a, b) => (a.badges?.length ?? 0) - (b.badges?.length ?? 0))) {
+    add(h.title, h.artist, { source: 'jtotal', id: h.id, label: (h.badges ?? []).join('・'), url: h.url });
+  }
   for (const h of unChecked) {
     if (!h) continue;
     add(h.title, h.artist, { source: 'utanet', id: h.id, label: '', url: h.url });
@@ -884,7 +1156,7 @@ const ARTIST_TTL_MS = 24 * 3600e3;
 async function artistSongs(nameRaw: string, unIdRaw: string) {
   const name = nameRaw.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
   if (!name) throw new HttpError(400, 'アーティスト名がありません');
-  const ck = 'artist1:' + fold(name);
+  const ck = 'artist2:' + fold(name);
   const cached = await cacheGet(ck, ARTIST_TTL_MS);
   if (cached) return cached;
 
@@ -893,10 +1165,13 @@ async function artistSongs(nameRaw: string, unIdRaw: string) {
     : utanetArtists(name)
         .then((l) => (l.find((a) => fold(a.name) === fold(name)) ?? l.find((a) => sameArtist(a.name, name)))?.unId ?? '')
         .catch(() => '');
-  const [un, uf, apple] = await Promise.all([
+  const [un, uf, apple, mcAll, rn] = await Promise.all([
     unIdP.then((id) => (id ? utanetArtistSongs(id) : [])).catch(() => [] as Hit[]),
     ufretArtistSongs(name).catch(() => [] as Hit[]),
     itunesArtistSongs(name).catch(() => new Map<string, AppleInfo>()),
+    mcList().catch(() => [] as McNode[]),
+    // リンネはアーティスト名で検索する(アーティストのページはサーバーからだと空で返る)
+    rinneSearch(name).catch(() => [] as Hit[]),
   ]);
 
   type Song = {
@@ -905,6 +1180,7 @@ async function artistSongs(nameRaw: string, unIdRaw: string) {
     crown: number;
     uf: { id: string; label: string; easy: boolean }[];
     un: string | null;
+    more: { source: string; id: string; label: string; url: string }[]; // コード進行メモ倉庫・リンネの譜面
     artwork?: string;
     appleId?: number;
     appleUrl?: string;
@@ -914,15 +1190,27 @@ async function artistSongs(nameRaw: string, unIdRaw: string) {
   const map = new Map<string, Song>();
   un.forEach((h, i) => {
     const k = fold(baseTitle(h.title));
-    if (k && !map.has(k)) map.set(k, { title: baseTitle(h.title), rank: i, crown: h.crown ?? 0, uf: [], un: h.id });
+    if (k && !map.has(k)) map.set(k, { title: baseTitle(h.title), rank: i, crown: h.crown ?? 0, uf: [], un: h.id, more: [] });
   });
   for (const h of uf) {
     const k = fold(baseTitle(h.title));
     if (!k) continue;
     let s = map.get(k);
-    if (!s) map.set(k, (s = { title: baseTitle(h.title), rank: null, crown: 0, uf: [], un: null }));
+    if (!s) map.set(k, (s = { title: baseTitle(h.title), rank: null, crown: 0, uf: [], un: null, more: [] }));
     const extra = h.title.normalize('NFKC').replace(baseTitle(h.title), '').trim();
     s.uf.push({ id: h.id, label: [extra, ...(h.badges ?? [])].filter(Boolean).join('・'), easy: (h.badges ?? []).includes('初心者ver') });
+  }
+  // コード進行メモ倉庫(新曲が多い)とリンネの譜面も足す(どちらにも無い曲は後ろに)
+  const more = [
+    ...mcAll.filter((n) => (n.artists || []).some((a) => sameArtist(a, name))).map(mcHit),
+    ...rn.filter((h) => sameArtist(h.artist, name)),
+  ];
+  for (const h of more) {
+    const k = fold(baseTitle(h.title));
+    if (!k) continue;
+    let s = map.get(k);
+    if (!s) map.set(k, (s = { title: baseTitle(h.title), rank: null, crown: 0, uf: [], un: null, more: [] }));
+    if (!s.more.some((x) => x.source === h.source && x.id === h.id)) s.more.push({ source: h.source, id: h.id, label: '', url: h.url });
   }
   const songs = [...map.entries()].map(([k, s]) => {
     s.uf.sort((a, b) => Number(a.easy) - Number(b.easy)); // 初心者ver は後ろ(ふつうの版を先に開く)
@@ -930,7 +1218,7 @@ async function artistSongs(nameRaw: string, unIdRaw: string) {
     if (a) Object.assign(s, { artwork: a.artwork, appleId: a.appleId, appleUrl: a.appleUrl, durationMs: a.durationMs, released: a.released });
     return s;
   });
-  const result = { name, songs, withChords: songs.filter((s) => s.uf.length).length };
+  const result = { name, songs, withChords: songs.filter((s) => s.uf.length || s.more.length).length };
   if (songs.length) bg(cachePut(ck, result));
   return result;
 }

@@ -882,9 +882,24 @@ textarea {
   background: #efe9fb;
   color: #6041a8;
 }
+.src-mcmemo {
+  background: #fff1d6;
+  color: #9a6200;
+}
+.src-rinne {
+  background: #e2f4f4;
+  color: #1d7473;
+}
+.src-jtotal {
+  background: #f1ecdf;
+  color: #6b5a2c;
+}
 :root[data-theme='dark'] .src-ufret,
 :root[data-theme='dark'] .src-chordwiki,
 :root[data-theme='dark'] .src-utanet,
+:root[data-theme='dark'] .src-mcmemo,
+:root[data-theme='dark'] .src-rinne,
+:root[data-theme='dark'] .src-jtotal,
 :root[data-theme='dark'] .src-manual {
   background: var(--surface-3);
   color: var(--text);

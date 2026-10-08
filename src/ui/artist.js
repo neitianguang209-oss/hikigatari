@@ -1,4 +1,4 @@
-// アーティストの曲一覧(歌ネットの人気順 + U-FRET にだけある曲)。曲をタップすると、その曲の譜面をまとめて探して開く
+// アーティストの曲一覧(歌ネットの人気順 + U-FRET・コード進行メモ倉庫・リンネにだけある曲)。曲をタップすると、その曲の譜面をまとめて探して開く
 import React, { useEffect, useMemo, useState } from 'react';
 import htm from 'htm';
 import { Icon, StarIcon } from './icons.js';
@@ -6,7 +6,7 @@ import { Artwork, Spinner, Empty, Segmented, toast } from './common.js';
 import { useLibrary } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { go, back } from '../lib/router.js';
-import { cx, norm, baseTitle, sameArtist } from '../lib/util.js';
+import { cx, norm, baseTitle, sameArtist, sourceName } from '../lib/util.js';
 import { openGroup } from './home.js';
 const html = htm.bind(React.createElement);
 
@@ -71,10 +71,11 @@ export function ArtistPage({ params }) {
         const r = await api('search', { q });
         g = (r.groups || []).find((x) => x.sources.length && norm(baseTitle(x.title)) === norm(s.title) && sameArtist(x.artist, artist));
       } catch (e) {
-        if (!s.uf?.length) throw e;
+        if (!s.uf?.length && !s.more?.length) throw e;
       }
-      if (!g && s.uf?.length) {
-        g = { title: s.title, artist, sources: s.uf.map((u) => ({ source: 'ufret', id: u.id, label: u.label, url: `https://www.ufret.jp/song.php?data=${u.id}` })) };
+      if (!g && (s.uf?.length || s.more?.length)) {
+        const uf = (s.uf || []).map((u) => ({ source: 'ufret', id: u.id, label: u.label, url: `https://www.ufret.jp/song.php?data=${u.id}` }));
+        g = { title: s.title, artist, sources: [...uf, ...(s.more || [])] };
       }
       if (!g) {
         go('/search?q=' + encodeURIComponent(q));
@@ -120,7 +121,7 @@ export function ArtistPage({ params }) {
               <button className="btn btn-sm" onClick=${() => go('/search?q=' + encodeURIComponent(artist))}>「${artist}」で検索する</button>
             </${Empty}>`
           : html`<div className="artist-tools">
-                <p className="artist-count">${songs.length}曲${state.withChords ? html` ・ U-FRET の譜面 ${state.withChords}曲` : null}</p>
+                <p className="artist-count">${songs.length}曲${state.withChords ? html` ・ 譜面の印つき ${state.withChords}曲` : null}</p>
                 <${Segmented}
                   size="sm"
                   label="並べ替え"
@@ -145,6 +146,7 @@ export function ArtistPage({ params }) {
                             <span className="song-row-sub">
                               ${s.released ? html`<span>${s.released.slice(0, 4)}年</span>` : null}
                               ${s.uf?.length ? html`<span className="src-badge src-ufret">U-FRET</span>` : null}
+                              ${[...new Set((s.more || []).map((m) => m.source))].map((k) => html`<span key=${k} className=${'src-badge src-' + k}>${sourceName(k)}</span>`)}
                               ${saved ? html`<span className="saved-tag">保存済み</span>` : null}
                             </span>
                           </span>
@@ -154,6 +156,6 @@ export function ArtistPage({ params }) {
                     })}
                   </ul>`
                 : html`<p className="muted small">「${filter}」に合う曲はありません</p>`}
-              <p className="muted small artist-foot">並びは歌ネットの人気順（歌詞の閲覧数）。U-FRET の印が無い曲も、開くと ChordWiki・歌ネットの譜面を探します。</p>`}
+              <p className="muted small artist-foot">並びは歌ネットの人気順（歌詞の閲覧数）。印が無い曲も、開くと ChordWiki・J-Total・歌ネットなどの譜面を探します。</p>`}
   </div>`;
 }
