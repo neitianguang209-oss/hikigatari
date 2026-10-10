@@ -119,7 +119,7 @@ export function glideTo(el, top, ms = null) {
   glideRaf = requestAnimationFrame(step);
 }
 
-// clock: 自分の録音に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
+// clock: 自分の録音・原曲の動画に合わせるときの時計 { time, seekTime, play, pause, ended, duration, anchors, bps }(使わないときは null)
 // clickVolume: クリック音の大きさ(0.6 / 1 / 1.5)
 // speed: 自分で決める速さの微調整(1 = そのまま。クリック音も同じだけ速く・遅くなるので、ずれない)
 export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar, countIn, click, durationMs, fitSong, clock = null, clickVolume = 1, speed = 1, estBpm = null }) {
@@ -475,6 +475,18 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     setProgress(0);
   };
 
+  // 流しているあいだに別の拍へ移る: 新しい位置まで0.6秒かけてなめらかに追いつく(一瞬で飛ばない)
+  const jumpToBeat = (b) => {
+    s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
+    s.countEnd = null;
+    setCountdown(0);
+    s.holding = false;
+    s.beat = s.startBeat = b;
+    setBeat(b, 0.03);
+    s.sched = b - 1;
+    tickClicks();
+  };
+
   // 行へ移動(再生中はその行から続ける)。行は画面の真ん中へ
   const jumpToLine = (i) => {
     measure();
@@ -489,17 +501,8 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       }
       return;
     }
-    if (s.playingFlag) {
-      // 流しているときは、新しい位置まで0.6秒かけてなめらかに追いつく(一瞬で飛ばない)
-      s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
-      s.countEnd = null;
-      setCountdown(0);
-      s.holding = false;
-      s.beat = b;
-      setBeat(b, 0.03);
-      s.sched = b - 1;
-      tickClicks();
-    } else glideTo(scrollRef.current, midOf(i) - anchor());
+    if (s.playingFlag) jumpToBeat(b);
+    else glideTo(scrollRef.current, midOf(i) - anchor());
   };
 
   // タップした行から流す: 止まっていれば、その行を画面の真ん中へ寄せながら流し始める。流していれば、その行へ移る
@@ -508,6 +511,30 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     if (s.tl.starts[i] == null || !s.tl.durs[i]) return;
     if (s.playingFlag) jumpToLine(i);
     else start(s.tl.starts[i]);
+  };
+
+  // 押したところ(歌詞の文字・コード)から流す: 止まっていれば流し始め、流していればそこへ移る。
+  // beat: 譜面の拍(小節の頭)。time: 曲(録音・動画)の時刻が分かっていれば、拍から計算せずにその時刻から
+  const playFrom = ({ beat, time = null }) => {
+    measure();
+    if (!s.tl.timed.length) return;
+    const c = live.current.clock;
+    if (!c) {
+      if (s.playingFlag) jumpToBeat(beat);
+      else start(beat);
+      return;
+    }
+    stopGlide();
+    s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
+    if (time != null) c.seekTime(Math.max(0, Math.min((c.duration() || Infinity) - 0.05, time)));
+    else clockSeek(beat);
+    c.play();
+    s.holding = false;
+    if (s.playingFlag) return;
+    s.playingFlag = true;
+    setPlaying(true);
+    cancelAnimationFrame(s.raf);
+    s.raf = requestAnimationFrame(frame);
   };
 
   const step = (dir) => {
@@ -588,5 +615,5 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     if (s.held) releasePlayback();
   }, []);
 
-  return { playing, countdown, progress, toggle, start, startAt, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, fit, scrollRate, loop, setLoop };
+  return { playing, isPlaying: () => !!s.playingFlag, countdown, progress, toggle, start, startAt, playFrom, stop, toStart, jumpToLine, step, measure, totalBeats: tl.total, starts: tl.starts, durs: tl.durs, fit, scrollRate, loop, setLoop };
 }

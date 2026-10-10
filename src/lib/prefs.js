@@ -20,7 +20,9 @@ export const DEFAULT_PREFS = {
   clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
   showCurrent: false, // 流しているあいだ、今の行に色を付ける(標準はオフ。BPM の時計と実際の歌がずれて見えるため)
-  tapToStart: true, // 譜面の行(や行の横の空いたところ)を押すと、その行を画面の真ん中に寄せて、そこから流す
+  tapToStart: true, // 譜面の歌詞・コード(や行の横の空いたところ)を押すと、そこから流す。コードの押さえ方は長押し
+  chordHoldSeen: false, // 「コードの押さえ方は長押し」の案内を出したか
+  musicTapSeen: false, // 曲と合わせる: 「歌詞を押すとそこから流れる」の案内を出したか
   appleCardDismissed: false,
   homeSort: 'recent', // recent | added | title
 };

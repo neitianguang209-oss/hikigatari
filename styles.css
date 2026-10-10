@@ -4003,3 +4003,183 @@ body:has(.rec-dock) .toast-host {
   color: var(--accent-strong);
   font-weight: 800;
 }
+
+/* ---------------------------------------------------------------- 曲と合わせる(原曲の YouTube の動画をアプリの中で流す) */
+
+.yt-video {
+  position: fixed;
+  z-index: 30;
+  top: calc(env(safe-area-inset-top) + 104px);
+  right: 10px;
+  width: 176px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: var(--shadow-lg);
+  transition: width 0.2s ease;
+}
+.yt-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+.yt-frame iframe {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.yt-video.is-big {
+  width: min(calc(100vw - 20px), 520px);
+}
+/* しまう(音だけ): 動画は流したまま、見えない大きさにする */
+.yt-video.is-hidden,
+.yt-video.is-empty {
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: none;
+}
+.yt-video-bar {
+  display: flex;
+}
+.yt-video-bar button {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  background: #1c1c1e;
+  color: #f2f2f2;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.yt-video-bar button + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+}
+.yt-video-bar button:active {
+  background: #2c2c2e;
+}
+.yt-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 6px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.yt-status span {
+  flex: 1;
+  min-width: 0;
+}
+.yt-status .btn {
+  flex: none;
+}
+.yt-status.is-sync,
+.yt-status.is-tip {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+.yt-status.is-error {
+  color: var(--danger);
+}
+/* 上のバーの「原曲」: 曲と合わせている間は色を反転 */
+.icon-btn.apple-btn.is-on,
+:root[data-theme='dark'] .icon-btn.apple-btn.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .icon-btn.apple-btn.is-on {
+    color: var(--on-accent);
+  }
+}
+/* コード名: 押すと「そこから流す」、長押しで押さえ方。長押しで文字の選択やメニューが出ないように */
+.chord {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+/* 設定のパネル: いまの動画・候補・リンクの貼り付け */
+.yt-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--bg);
+  margin-bottom: 10px;
+}
+.yt-now img,
+.yt-cand img {
+  flex: none;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #000;
+}
+.yt-now b {
+  display: block;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.yt-now small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.menu-item.yt-cand .menu-item-text {
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+.yt-url {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.yt-url input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* iPhone で入力のとき画面が拡大されない大きさ */
+}
+.yt-url .btn {
+  flex: none;
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .yt-video {
+    top: calc(env(safe-area-inset-top) + 52px);
+  }
+  .yt-status.is-tip,
+  .yt-status.is-warn {
+    display: none;
+  }
+}
+@media print {
+  .yt-video,
+  .yt-dock {
+    display: none !important;
+  }
+}
+/* スマホの幅では、動画の小さい窓をもう少し小さく(譜面を隠しすぎないように) */
+@media (max-width: 430px) {
+  .yt-video.is-small {
+    width: 152px;
+  }
+}
+/* 横にコードの一覧が出る広い画面: 動画の小さい窓が一覧の頭を隠さないよう、一覧を窓の下から始める */
+@media (min-width: 1000px) {
+  .song:has(.yt-video.is-small) .strip-side {
+    padding-top: 152px;
+  }
+}

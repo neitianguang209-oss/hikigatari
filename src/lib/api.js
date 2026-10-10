@@ -29,14 +29,15 @@ export function onUnpaired(fn) {
   return () => listeners.delete(fn);
 }
 
-export async function api(action, payload = {}, { timeout = 30000 } = {}) {
+// url: 本体とは別の Edge Function を呼ぶとき(動画を探す hikigatari-yt)
+export async function api(action, payload = {}, { timeout = 30000, url = FN_URL } = {}) {
   const headers = { 'content-type': 'application/json' };
   const key = deviceKey.get();
   if (key) headers['x-hk-key'] = key;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const r = await fetch(FN_URL, { method: 'POST', headers, body: JSON.stringify({ action, ...payload }), signal: ctrl.signal });
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ action, ...payload }), signal: ctrl.signal });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       const err = new Error(j.error || `通信エラー (${r.status})`);

@@ -50,7 +50,7 @@ const keep = (c) => /[ぁ-ゖァ-ヺー一-鿿々〆ヶA-Za-z0-9]/.test(c);
 const N = (c) => c.normalize('NFKC').toLowerCase();
 
 // 2つの文字の並びの対応(最長共通部分列)。a[i] に対応する b の番号(無ければ -1)
-function lcsMap(a, b) {
+export function lcsMap(a, b) {
   const n = a.length;
   const m = b.length;
   const W = m + 1;
@@ -103,12 +103,22 @@ export function alignKrc(secs, krc) {
   A.forEach((a, k) => {
     if (map[k] >= 0 && !firstOf.has(a.i)) firstOf.set(a.i, B[map[k]]);
   });
-  const off = median([...firstOf.entries()].map(([i, b]) => secs[i].t - b.t));
+  const diffs = [...firstOf.entries()].map(([i, b]) => [i, secs[i].t - b.t]).sort((x, y) => x[0] - y[0]);
+  const off = median(diffs.map((d) => d[1]));
   if (off == null) return null;
+  // ずれは曲全体でほぼ同じことが多いが、動画と音源で前奏・間奏の長さが違う曲や、テンポの揺れる曲では、場所によって変わる
+  // (「マリーゴールド」は曲の頭で +3.5秒、終わりで −2.5秒)。行ごとに前後5行のまん中の値を見て、
+  // 全体の値から0.5秒以上離れているところだけ、その場所の値を使う
+  const offOf = new Map();
+  diffs.forEach(([i], k) => {
+    const near = median(diffs.slice(Math.max(0, k - 5), k + 6).map((d) => d[1]));
+    offOf.set(i, Math.abs(near - off) >= 0.5 ? near : off);
+  });
   const out = secs.map(() => []);
   A.forEach((a, k) => {
     const b = map[k] >= 0 ? B[map[k]] : null;
-    if (b && b.first) out[a.i].push({ p: a.p, t: b.t + off, e: b.e + off });
+    const o = offOf.get(a.i) ?? off;
+    if (b && b.first) out[a.i].push({ p: a.p, t: b.t + o, e: b.e + o });
   });
   return out.map((m) => (m.length >= 2 ? m : null));
 }
@@ -131,6 +141,8 @@ export function mcToSheet(c, { krc = null, ruby = null } = {}) {
   const out = [`{key:${firstKey}}`];
   if (bpm) out.push(`{tempo:${bpm}}`);
   out.push('');
+  // 譜面に出した行(歌詞・コードの行)ごとの時刻。曲(動画)と合わせて流すときに使う
+  const rows = [];
   let lastKey = kp;
   secs.forEach((s, i) => {
     const k = keyPc(s.key);
@@ -156,9 +168,10 @@ export function mcToSheet(c, { krc = null, ruby = null } = {}) {
     const lyric = (s.lyric || '').trim();
     if (!chords.length && !lyric) return;
     out.push(lyric ? lyricRow(lyric, chords, start, end, nb, marksOf?.[i] || null, wOf) : chordRow(chords, start, end, nb));
+    rows.push({ t: start, end, lyric, chords: chords.map((x) => x.t), marks: marksOf?.[i] || null });
   });
   while (out.length && out[out.length - 1] === '') out.pop();
-  return { text: out.join('\n'), bpm, key: firstKey, aligned: !!marksOf?.some(Boolean) };
+  return { text: out.join('\n'), bpm, key: firstKey, aligned: !!marksOf?.some(Boolean), rows };
 }
 
 // 小節の境目の時刻(行の長さを小節の数で等分)。コードが境目の少し前(0.06秒以内)なら境目に寄せる

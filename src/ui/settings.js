@@ -80,11 +80,11 @@ export function Settings() {
       <${Row} label="歌詞1行の長さ（標準）" hint="小節線の無い譜面で使います。「自動」はコードの数と歌詞の長さから見積もります">
         <${Segmented} size="sm" label="歌詞1行の長さ" value=${p.barsPerLine} onChange=${(v) => set({ barsPerLine: v })} options=${[{ value: 0, label: "自動" }, ...[1, 2, 3, 4].map((n) => ({ value: n, label: `${n}小節` }))]} />
       </${Row}>
-      <${Switch} label="スタート前に1小節カウント" checked=${p.countIn} onChange=${(v) => set({ countIn: v })} />
+      <${Switch} label="スタート前に1小節カウント" hint="メトロノームを鳴らしているときだけ、4・3・2・1 と数えてから始まります。鳴らしていないときは、押したらすぐ流れます" checked=${p.countIn} onChange=${(v) => set({ countIn: v })} />
       <${Switch} label="クリック音（メトロノーム）" hint="曲ごとにも切り替えられます" checked=${p.click} onChange=${(v) => set({ click: v })} />
       <${Switch} label="小節線を表示" checked=${p.showBars} onChange=${(v) => set({ showBars: v })} />
       <${Switch} label="今の行に色を付ける" hint="自動スクロール中、今の行を黄色くします" checked=${!!p.showCurrent} onChange=${(v) => set({ showCurrent: v })} />
-      <${Switch} label="タップしたところから流す" hint="譜面の行（行の横の空いたところでも）を押すと、その行が画面の真ん中に来て、そこから自動スクロールが始まります。流している間に押すと、その行へ移ります" checked=${p.tapToStart !== false} onChange=${(v) => set({ tapToStart: v })} />
+      <${Switch} label="タップしたところから流す" hint="譜面の歌詞やコードを押すと、そこから流れ始めます（流している間に押すと、そこへ移ります）。コードの押さえ方は、コードを長押し。オフにすると、コードを押すと押さえ方が出ます" checked=${p.tapToStart !== false} onChange=${(v) => set({ tapToStart: v })} />
     </${Section}>
 
     <${Section} title="表示">

@@ -256,6 +256,12 @@ export async function exportAll() {
   return { app: 'hikigatari', exportedAt: new Date().toISOString(), songs: [...mem.values()].filter((s) => !s.deleted) };
 }
 
+// ---------------------------------------------------------------- 手元の控え(同期しない小さなデータ。曲と譜面の時刻の対応など、作り直せるもの)
+export const local = {
+  get: (k) => idb.kvGet(k).catch(() => null),
+  set: (k, v) => idb.kvSet(k, v).catch(() => {}),
+};
+
 // ---------------------------------------------------------------- 自分の録音(動画・音声)
 // 大きいので同期はせず、この端末の中だけに置く。曲ごとに1つ
 export const media = {
