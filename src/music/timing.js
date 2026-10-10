@@ -15,6 +15,9 @@ const N = (c) => {
 };
 const strip = (s) => String(s || '').replace(/[\s　]/g, '');
 const weightsOf = makeWeights(null);
+// コード進行メモ倉庫の行に合わせた歌詞の文字の時刻は、少しだけ早めに出る(歌は行の頭の少し後から始まることが多いぶん)。
+// 「マリーゴールド」で動画の字幕の時刻と比べると、まん中で0.34秒早かった(字幕は歌い出しより0.2秒ほど遅れて出る)。そのぶんを戻す
+const MARK_SHIFT = 0.15;
 
 export const lineText = (l) => (l.segs || []).map((s) => s.t).join('');
 // k 番目のかたまり(seg)が始まる文字の位置
@@ -56,7 +59,7 @@ export function syncedLines(synced) {
 
 // コード進行メモ倉庫の行(mcToSheet の rows) → 合わせるための行(歌詞のある行だけ)
 export function mcSyncedLines(rows) {
-  return (rows || []).filter((r) => r.lyric).map((r) => ({ t: r.t, text: r.lyric, marks: r.marks ? r.marks.map((m) => ({ p: m.p, t: m.t })) : null }));
+  return (rows || []).filter((r) => r.lyric).map((r) => ({ t: r.t, text: r.lyric, marks: r.marks ? r.marks.map((m) => ({ p: m.p, t: m.t + MARK_SHIFT })) : null }));
 }
 
 // ---------------------------------------------------------------- 譜面の行に時刻を割り当てる
@@ -91,7 +94,7 @@ export function mcDirect(rows, lines) {
         const at = src.map((ch) => (ch.trim() ? seen++ : -1));
         for (const m of r.marks) {
           const o = at[m.p];
-          if (o >= 0 && ord[o] != null) marks.push({ p: ord[o], t: m.t });
+          if (o >= 0 && ord[o] != null) marks.push({ p: ord[o], t: m.t + MARK_SHIFT });
         }
       } else if (chords) marks = chords.filter((c) => c.k != null).map((c) => ({ p: segStart(l, c.k), t: c.t }));
       marks = monotonic(marks.sort((a, b) => a.p - b.p));

@@ -45,14 +45,21 @@ export function jtotalText(raw) {
 }
 
 // r: Edge Function の sheet の結果。krc(): 歌詞の1文字ずつの時刻を取ってくる関数(コード進行メモ倉庫のときだけ使う)
+// krcs(): その候補をまとめて取ってくる関数(あれば、曲データにいちばん合う候補を選ぶ。取れなければ krc() の1つ)
 // 戻り値: { text, key, bpm }
-export async function sheetFromFetched(r, { krc = null } = {}) {
+export async function sheetFromFetched(r, { krc = null, krcs = null } = {}) {
   if (r.mc) {
+    let list = null;
     let lines = null;
     try {
-      lines = krc ? await krc() : null;
+      list = krcs ? await krcs() : null;
     } catch {}
-    const out = mcToSheet(r.mc, { krc: lines?.length ? lines : null });
+    if (!list?.length) {
+      try {
+        lines = krc ? await krc() : null;
+      } catch {}
+    }
+    const out = mcToSheet(r.mc, { krc: lines?.length ? lines : null, krcs: list?.length ? list : null });
     return { text: out.text, key: out.key, bpm: out.bpm || r.bpm || null, aligned: out.aligned };
   }
   let text = String(r.text || '');

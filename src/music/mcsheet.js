@@ -75,9 +75,13 @@ const median = (xs) => {
   return a.length ? a[a.length >> 1] : null;
 };
 
-// secs: 行(t, lyric, progressions)。krc: krcToSynced の行 [{ t, text, words }]
-// 戻り値: 行ごとの文字の印 [{ p, t, e }](動画の時刻)。合わせられなければ null
-export function alignKrc(secs, krc) {
+const pct = (xs, f) => {
+  const a = xs.filter(Number.isFinite).sort((p, q) => p - q);
+  return a.length ? a[Math.min(a.length - 1, Math.floor(a.length * f))] : null;
+};
+
+// 歌詞の文字を対応させて、行ごとの「ずれ(動画の時刻 − 歌詞の時刻)」を出す: 行の頭のコードの時刻と、その行で最初に歌う文字の時刻の差
+function matchKrc(secs, krc) {
   const A = [];
   secs.forEach((s, i) => Array.from((s.lyric || '').trim()).forEach((ch, p) => keep(ch) && A.push({ i, p, ch: N(ch) })));
   const B = [];
@@ -97,22 +101,53 @@ export function alignKrc(secs, krc) {
   );
   const hit = [...map].filter((j) => j >= 0).length;
   if (hit < A.length * 0.6) return null; // 歌詞が違いすぎる(別の曲・別の版)
-  // ずれ(動画の時刻 − 歌詞の時刻): 行の頭のコードの時刻と、その行で最初に歌う文字の時刻の差の、まん中の値。
-  // (コードの鳴る時刻を文字の歌い始めにそろえる細かい合わせ込みも試したが、8分音符ずつずれた位置にそろってしまい、かえって悪くなった)
   const firstOf = new Map();
   A.forEach((a, k) => {
     if (map[k] >= 0 && !firstOf.has(a.i)) firstOf.set(a.i, B[map[k]]);
   });
-  const diffs = [...firstOf.entries()].map(([i, b]) => [i, secs[i].t - b.t]).sort((x, y) => x[0] - y[0]);
-  const off = median(diffs.map((d) => d[1]));
+  const rows = [...firstOf.keys()].sort((x, y) => x - y).map((i) => ({ i, d: secs[i].t - firstOf.get(i).t }));
+  return rows.length ? { A, B, map, rows, hit: hit / A.length } : null;
+}
+
+// ずれの見積もり = 行ごとのずれの、まん中の値。
+// (歌は行の頭の少し後から始まることが多いので、行の終わりの側からも幅をしぼって真ん中を取る見積もりも試した。
+//  動画の字幕の時刻には近づくが、コードを置く文字は ChordWiki の正解9曲で ぴったり 74%→59% と悪くなったので、やめた)
+const offsetOf = (rows) => median(rows.map((r) => r.d));
+
+// 文字ごとの時刻つき歌詞の候補のうち、この曲データ(動画の時刻)にいちばん合うもの。
+// 同じ曲でも音源の版ごとに時刻の違う歌詞があり、動画と速さの違うものだと、ずれが曲の中で大きく変わる
+// (ずれのばらつきがいちばん小さいものを選ぶ)
+export function pickKrc(secs, list) {
+  let best = null;
+  let bestSpread = Infinity;
+  for (const krc of list || []) {
+    const m = matchKrc(secs, krc);
+    if (!m || m.rows.length < 6) continue;
+    const d = m.rows.map((r) => r.d);
+    const spread = pct(d, 0.8) - pct(d, 0.2) - m.hit; // 同じくらいなら、歌詞がよく合うほう
+    if (spread < bestSpread) {
+      bestSpread = spread;
+      best = krc;
+    }
+  }
+  return best;
+}
+
+// secs: 行(t, lyric, progressions)。krc: krcToSynced の行 [{ t, text, words }]
+// 戻り値: 行ごとの文字の印 [{ p, t, e }](動画の時刻)。合わせられなければ null
+export function alignKrc(secs, krc) {
+  const m = matchKrc(secs, krc);
+  if (!m) return null;
+  const { A, B, map, rows } = m;
+  // (コードの鳴る時刻を文字の歌い始めにそろえる細かい合わせ込みも試したが、8分音符ずつずれた位置にそろってしまい、かえって悪くなった)
+  const off = offsetOf(rows);
   if (off == null) return null;
-  // ずれは曲全体でほぼ同じことが多いが、動画と音源で前奏・間奏の長さが違う曲や、テンポの揺れる曲では、場所によって変わる
-  // (「マリーゴールド」は曲の頭で +3.5秒、終わりで −2.5秒)。行ごとに前後5行のまん中の値を見て、
-  // 全体の値から0.5秒以上離れているところだけ、その場所の値を使う
+  // ずれは曲全体でほぼ同じことが多いが、動画と音源で前奏・間奏の長さが違う曲や、速さの違う版の歌詞では、場所によって変わる。
+  // 行ごとに前後5行で見積もり、全体の値から0.5秒以上離れているところだけ、その場所の値を使う
   const offOf = new Map();
-  diffs.forEach(([i], k) => {
-    const near = median(diffs.slice(Math.max(0, k - 5), k + 6).map((d) => d[1]));
-    offOf.set(i, Math.abs(near - off) >= 0.5 ? near : off);
+  rows.forEach((r, k) => {
+    const near = offsetOf(rows.slice(Math.max(0, k - 5), k + 6));
+    offOf.set(r.i, Math.abs(near - off) >= 0.5 ? near : off);
   });
   const out = secs.map(() => []);
   A.forEach((a, k) => {
@@ -120,16 +155,18 @@ export function alignKrc(secs, krc) {
     const o = offOf.get(a.i) ?? off;
     if (b && b.first) out[a.i].push({ p: a.p, t: b.t + o, e: b.e + o });
   });
-  return out.map((m) => (m.length >= 2 ? m : null));
+  return out.map((x) => (x.length >= 2 ? x : null));
 }
 
 // ---------------------------------------------------------------- 譜面テキストにする
 
-// c: 曲データ(chordsJson)。krc: 歌詞の1文字ずつの時刻(krcToSynced の形、無ければ null)。ruby: ふりがなの辞書
-export function mcToSheet(c, { krc = null, ruby = null } = {}) {
+// c: 曲データ(chordsJson)。krc: 歌詞の1文字ずつの時刻(krcToSynced の形、無ければ null)。
+// krcs: その候補がいくつかあるとき(この曲データにいちばん合うものを選んで使う)。ruby: ふりがなの辞書
+export function mcToSheet(c, { krc = null, krcs = null, ruby = null } = {}) {
   const secs = (c.sections || []).map((s) => ({ ...s, t: toSec(s.time) })).sort((a, b) => a.t - b.t);
   const bpm = Number(c.bpm) > 0 ? Number(c.bpm) : null;
   const barLen = bpm ? 240 / bpm : null; // 4拍子
+  if (krcs?.length) krc = pickKrc(secs, krcs) || krc;
   const marksOf = krc ? alignKrc(secs, krc) : null;
   const wOf = makeWeights(ruby);
   let kp = keyPc(secs.find((s) => s.key)?.key) ?? 0;

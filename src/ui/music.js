@@ -11,7 +11,7 @@ import { api } from '../lib/api.js';
 import { YT_FN_URL } from '../config.js';
 import { lib, local } from '../lib/store.js';
 import { getPrefs, setPrefs } from '../lib/prefs.js';
-import { findLyrics, krcToSynced } from '../lib/lyrics.js';
+import { findLyrics, krcToSynced, krcCandidates } from '../lib/lyrics.js';
 import { mcToSheet } from '../music/mcsheet.js';
 import { alignLines, mcDirect, mcSyncedLines, syncedLines, tapTime, rankVideos, parseYouTubeId } from '../music/timing.js';
 import { cx, baseTitle } from '../lib/util.js';
@@ -217,11 +217,18 @@ async function buildTiming(song, lines) {
     try {
       const r = await api('sheet', { source: 'mcmemo', id: mcSlug, title: song.title, artist: song.artist });
       if (r?.mc?.sections?.length) {
+        // 文字ごとの時刻つき歌詞は、候補の中からこの動画の時刻にいちばん合うものを使う(音源の版ごとに時刻が違う)
+        let krcs = null;
         let krc = null;
         try {
-          krc = krcToSynced((await api('lyrics_krc', { title: song.title, artist: song.artist || '', durationMs: song.durationMs || 0 })).lines);
+          krcs = await krcCandidates({ title: song.title, artist: song.artist || '', durationMs: song.durationMs || 0 });
         } catch {}
-        const rows = mcToSheet(r.mc, { krc: krc?.length ? krc : null }).rows;
+        if (!krcs?.length) {
+          try {
+            krc = krcToSynced((await api('lyrics_krc', { title: song.title, artist: song.artist || '', durationMs: song.durationMs || 0 })).lines);
+          } catch {}
+        }
+        const rows = mcToSheet(r.mc, { krc: krc?.length ? krc : null, krcs: krcs?.length ? krcs : null }).rows;
         const direct = song.source === 'mcmemo' ? mcDirect(rows, lines) : null;
         const res = direct ? { lines: direct, hit: 1 } : alignLines(lines, mcSyncedLines(rows));
         if (res) return { base: 'yt', vid: r.mc.youtubeVideoId || null, src: 'mc', lines: res.lines, hit: res.hit };
@@ -308,7 +315,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     let alive = true;
     setTiming(null);
     (async () => {
-      const key = 'tm1:' + song.id;
+      const key = 'tm2:' + song.id;
       let tm = await local.get(key);
       // 見つからなかった曲は3日、行ごとの時刻しか無かった曲は7日たったら、もう一度探す(歌詞のデータがあとから増えることがある)
       const age = Date.now() - (tm?.at || 0);

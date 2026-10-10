@@ -9,7 +9,7 @@ import { useSongMusic, MusicDock, MusicPanel } from './music.js';
 import { segStart, tapBar } from '../music/timing.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
 import { sheetFromFetched } from '../music/sources.js';
-import { krcToSynced } from '../lib/lyrics.js';
+import { krcToSynced, krcCandidates } from '../lib/lyrics.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
@@ -42,6 +42,7 @@ export function SongPage({ id }) {
         // サイトごとの書き方(カポつきの形・コードの行+歌詞の行・コードの時刻つきデータ)を、ふつうの譜面にそろえる
         const conv = await sheetFromFetched(r, {
           krc: async () => krcToSynced((await api('lyrics_krc', { title: cur.title, artist: cur.artist || '', durationMs: cur.durationMs || 0 })).lines),
+          krcs: () => krcCandidates({ title: cur.title, artist: cur.artist || '', durationMs: cur.durationMs || 0 }),
         });
         const parsed = parseSheet(conv.text);
         if (!parsed.lines.some((l) => l.segs && l.segs.some((s) => s.c))) throw Object.assign(new Error('譜面にコードが見つかりませんでした'), { status: 404 });

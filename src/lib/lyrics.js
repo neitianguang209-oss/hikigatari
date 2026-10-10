@@ -3,6 +3,7 @@
 // 2) UtaTen(漢字にふりがな付き。時刻は無い)・歌ネット(時刻なし)は Edge Function 経由
 // ふりがなは「その文字を何拍で歌うか」を数えるのに使う(コードを置く文字の位置が正確になる)
 import { api } from './api.js';
+import { YT_FN_URL } from '../config.js';
 import { norm, baseTitle, sameArtist } from './util.js';
 import { parseLRC } from '../music/lyricsfit.js';
 
@@ -44,6 +45,13 @@ export function krcToSynced(lines) {
     out.push({ t: words[0].t, text, words });
   }
   return out;
+}
+
+// 文字ごとの時刻つき歌詞の候補をまとめて(4つまで)。同じ曲でも音源の版ごとに時刻の違う歌詞があるので、
+// コード進行メモ倉庫の曲データ(動画の時刻)にいちばん合うものを選ぶのに使う(mcsheet.js の pickKrc)
+export async function krcCandidates({ title, artist, durationMs }) {
+  const r = await api('krc_all', { title: baseTitle(title || ''), artist: artist || '', durationMs: durationMs || 0 }, { url: YT_FN_URL });
+  return (r.list || []).map((c) => krcToSynced(c.lines)).filter((l) => l.length >= 3);
 }
 
 const KANA = /[ぁ-ゖァ-ヺ]/g;
