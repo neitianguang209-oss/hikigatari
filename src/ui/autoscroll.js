@@ -33,6 +33,22 @@ export function timelineBeats(lines, barsPerLine, bpb, bpm = 100) {
   return t;
 }
 
+// 行ごとの頭の拍(starts)と長さ(durs)。timed: 長さのある行(歌詞・コードの行)の番号
+export function timelineOf(lines, barsPerLine, bpb, bpm = 100) {
+  const starts = [];
+  const durs = [];
+  let t = 0;
+  for (const l of lines) {
+    const d = lineBeats(l, barsPerLine, bpb, bpm);
+    starts.push(t);
+    durs.push(d);
+    t += d;
+  }
+  const timed = [];
+  durs.forEach((d, i) => d > 0 && timed.push(i));
+  return { starts, durs, total: t, timed };
+}
+
 // 譜面全体を曲の実際の長さに合わせるための倍率(時間の伸び縮み)。合わせないときは 1
 export function songFit(totalBeats, bpm, durationMs) {
   if (!durationMs || !bpm || !totalBeats) return null;
@@ -130,20 +146,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const s = useRef({ beat: 0, raf: 0, last: 0, holding: false, idle: 0, expect: null, tops: [], heights: [], countEnd: null, startBeat: 0, lastInt: null, cur: -1, lastProg: 0, clickPhase: 0, loop: null, sched: 0 }).current;
   const live = useRef({});
 
-  const tl = useMemo(() => {
-    const starts = [];
-    const durs = [];
-    let t = 0;
-    for (const l of lines) {
-      const d = lineBeats(l, barsPerLine, beatsPerBar, estBpm || bpm);
-      starts.push(t);
-      durs.push(d);
-      t += d;
-    }
-    const timed = [];
-    durs.forEach((d, i) => d > 0 && timed.push(i));
-    return { starts, durs, total: t, timed };
-  }, [lines, barsPerLine, beatsPerBar, estBpm || bpm]);
+  const tl = useMemo(() => timelineOf(lines, barsPerLine, beatsPerBar, estBpm || bpm), [lines, barsPerLine, beatsPerBar, estBpm || bpm]);
   s.tl = tl; // requestAnimationFrame のループからも常に最新の時間軸を見る
 
   // 曲の長さに合わせる: 譜面の拍を進める速さだけを変える(クリック音は本来のBPMのまま)
@@ -276,7 +279,12 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
           eff = a;
         }
       }
-      if (!s.holding) setScroll(posAtBeat(eff) - anchor());
+      // 「合わせる」が終わったら、手で動かしていた譜面を、いまの位置へなめらかに戻す
+      if (s.free && !c.sync) {
+        s.free = false;
+        s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
+      }
+      if (!s.holding && !s.free) setScroll(posAtBeat(eff) - anchor());
       highlight(eff);
       if (ts - s.lastProg > 250) {
         s.lastProg = ts;
@@ -443,6 +451,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   const stop = () => {
     live.current.clock?.pause();
     s.playingFlag = false;
+    s.free = false;
     clearInterval(s.tick);
     cancelAnimationFrame(s.raf);
     s.countEnd = null;
@@ -553,6 +562,13 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     const onScroll = () => {
       if (!s.playingFlag) return;
       if (s.expect != null && Math.abs(el.scrollTop - s.expect) <= 3) return;
+      // 「合わせる」の間(いま歌っている歌詞を探して押す): 手で動かしたら、譜面は追いかけるのをやめて、そこに置いたままにする。
+      // 録音・動画の再生位置は動かさない(探している間に曲が飛ばないように)
+      if (live.current.clock?.sync) {
+        s.free = true;
+        s.glide = null;
+        return;
+      }
       // 指で動かしている間は、拍の時計を止めておく
       if (!s.holding && !live.current.clock) s.frozenBeat = beatNow();
       s.holding = true;

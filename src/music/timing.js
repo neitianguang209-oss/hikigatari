@@ -6,6 +6,7 @@
 // 行ごとの結果: { t: 行の頭の時刻, end?: 行の終わり, marks: [{ p: 文字の位置, t }], chords: [{ k: 何番目のかたまり(seg), t }] | null }
 import { lcsMap } from './mcsheet.js';
 import { makeWeights } from './lyricsfit.js';
+import { moraCount } from './sheet.js';
 
 const keep = (c) => /[ぁ-ゖァ-ヺー一-鿿々〆ヶA-Za-z0-9]/.test(c);
 // 比べるときは全角半角・大文字小文字・カタカナひらがなの違いを無視する
@@ -46,7 +47,7 @@ function wordMarks(words) {
   for (const w of words || []) {
     const chars = Array.from(w.s);
     const k = chars.findIndex((c) => c.trim());
-    if (w.t != null && k >= 0) marks.push({ p: p + k, t: w.t });
+    if (w.t != null && k >= 0) marks.push(w.d > 0 ? { p: p + k, t: w.t, d: w.d } : { p: p + k, t: w.t });
     p += chars.length;
   }
   return marks;
@@ -119,12 +120,12 @@ export function alignLines(lines, synced) {
   const B = [];
   (synced || []).forEach((l, j) => {
     const chars = Array.from(l.text || '');
-    const at = new Map((l.marks || []).map((m) => [m.p, m.t]));
+    const at = new Map((l.marks || []).map((m) => [m.p, m]));
     const len = chars.filter(keep).length;
     let q = 0;
     chars.forEach((ch, p) => {
       if (!keep(ch)) return;
-      B.push({ j, q, len, ch: N(ch), t: at.has(p) ? at.get(p) : q === 0 ? l.t : null });
+      B.push({ j, q, len, ch: N(ch), t: at.has(p) ? at.get(p).t : q === 0 ? l.t : null, d: at.get(p)?.d });
       q++;
     });
   });
@@ -156,7 +157,7 @@ export function alignLines(lines, synced) {
       const x = B[map[k]];
       got++;
       // 時刻の分かる文字(単語の頭・行の頭)はそのまま。行の途中から始まる譜面の行は、その行の中の位置から見積もる
-      if (x.t != null) marks.push({ p: A[k].p, t: x.t });
+      if (x.t != null) marks.push(x.d > 0 ? { p: A[k].p, t: x.t, d: x.d } : { p: A[k].p, t: x.t });
       else if (!marks.length && got === 1) marks.push({ p: A[k].p, t: synced[x.j].t + (x.q / Math.max(1, x.len)) * spanOf(x.j, x.len) * 0.9, approx: true });
     }
     const size = b - a;
@@ -172,6 +173,73 @@ export function alignLines(lines, synced) {
     lastT = marks[marks.length - 1].t;
   }
   return { lines: out, hit };
+}
+
+
+// ---------------------------------------------------------------- 原曲で歌っている区間
+
+// 原曲の「歌っている区間」[[始まり, 終わり] か [始まり, 終わり, ここまでは歌っているかもしれない], …]。
+// 自分の歌の録音を譜面に合わせるときの見本にする(music/voice.js)。
+// 譜面に書かれていない くり返し なども入っているよう、譜面の行からではなく、時刻つきの歌詞そのものから作る
+const cs = (x) => Math.round(x * 100) / 100;
+function spans(add) {
+  const out = [];
+  add((s, e, u = null) => {
+    const last = out[out.length - 1];
+    if (last && last.length === 2 && u == null && s - last[1] < 0.22) last[1] = Math.max(last[1], e);
+    else if (e > s) out.push(u != null && u > e ? [s, e, u] : [s, e]);
+  });
+  return out.map((v) => v.map(cs));
+}
+// 行の時刻しか分からない歌詞は、行の終わりが分からない。文字の数から「ここまでは確かに歌っている」と
+// 「ここまでは歌っているかもしれない」を見積もる(1音にかける長さは、行と行の間隔から曲ごとに測る)
+function guessEnds(ls, textOf) {
+  const per = [];
+  ls.forEach((l, k) => {
+    const m = moraCount(textOf(l));
+    const gap = ls[k + 1] ? ls[k + 1].t - l.t : 0;
+    if (m >= 4 && gap > 1 && gap < 15) per.push(gap / m);
+  });
+  per.sort((a, b) => a - b);
+  // 間隔には息つぎや休みも入っているので、短いほうから3割のところを「1音の長さ」とする
+  const rate = per.length >= 4 ? Math.max(0.12, Math.min(0.5, per[Math.floor(per.length * 0.3)] * 0.9)) : 0.24;
+  return (l, from, next) => {
+    const est = moraCount(textOf(l)) * rate + 0.3;
+    const sure = Math.max(from + 0.4, Math.min(next - 0.3, from + est * 0.6));
+    return [sure, Math.max(sure, Math.min(next - 0.2, from + est * 2 + 1))];
+  };
+}
+// 時刻つき歌詞(LRC・KRC)から。文字ごとの長さがあればそのまま
+export function vocalSpans(synced) {
+  const ls = (synced || []).filter((l) => l.text);
+  const ends = guessEnds(ls, (l) => l.text);
+  return spans((put) =>
+    ls.forEach((l, k) => {
+      const next = ls[k + 1] ? ls[k + 1].t : Infinity;
+      const ws = (l.words || []).filter((w) => w.t != null && w.d > 0 && w.s.trim());
+      // 行の最後の音をどこまで伸ばすかは、歌う人しだい。最後の文字の頭(0.25秒)までを「確かに歌っている」とする
+      if (ws.length)
+        ws.forEach((w, q) => {
+          if (q < ws.length - 1 || w.d <= 0.4) put(w.t, w.t + w.d);
+          else put(w.t, w.t + 0.25, Math.min(w.t + w.d, next - 0.05));
+        });
+      else put(l.t, ...ends(l, l.t, next));
+    }),
+  );
+}
+// コード進行メモ倉庫の行(mcToSheet の rows)から。最後に時刻の分かる文字までは確かに歌っている
+export function mcSpans(rows) {
+  const ls = (rows || []).filter((r) => r.lyric);
+  const ends = guessEnds(ls, (r) => r.lyric);
+  return spans((put) =>
+    ls.forEach((r, k) => {
+      const next = Math.min(ls[k + 1] ? ls[k + 1].t : Infinity, r.end > r.t ? r.end + 0.2 : Infinity);
+      const z = r.marks?.length ? r.marks[r.marks.length - 1] : null;
+      const [sure, maybe] = ends(r, r.t, next);
+      const known = z ? Math.min(next - 0.3, z.t + MARK_SHIFT + 0.2) : 0;
+      put(r.t, Math.max(sure, known), Math.max(maybe, known));
+    }),
+  );
 }
 
 // ---------------------------------------------------------------- 押したところ → 曲の時刻

@@ -1,7 +1,7 @@
 // ひきがたり Service Worker(オフラインでもアプリを開けるように)
 // アプリを更新してデプロイするたびに、CACHE_NAME の番号を必ず上げる。
 // 上げないとブラウザが sw.js の変更を検知できず、古い画面を配信し続ける。
-const CACHE_NAME = 'hikigatari-v27';
+const CACHE_NAME = 'hikigatari-v28';
 const RUNTIME = 'hikigatari-runtime';
 
 const APP_SHELL = [
@@ -30,6 +30,7 @@ const APP_SHELL = [
   './src/music/sheet.js',
   './src/music/sources.js',
   './src/music/timing.js',
+  './src/music/voice.js',
   './src/ui/apple.js',
   './src/ui/artist.js',
   './src/ui/autoscroll.js',

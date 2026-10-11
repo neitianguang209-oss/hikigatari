@@ -2,4 +2,4 @@
 export const FN_URL = 'https://gzayrjlhruhvklsidraw.supabase.co/functions/v1/hikigatari';
 // 原曲の YouTube の動画を探す(曲と合わせる)
 export const YT_FN_URL = 'https://gzayrjlhruhvklsidraw.supabase.co/functions/v1/hikigatari-yt';
-export const APP_VERSION = '1.16.1';
+export const APP_VERSION = '1.17.0';

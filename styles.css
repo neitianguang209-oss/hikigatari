@@ -3278,6 +3278,22 @@ html,
   min-width: 3.2em;
   justify-content: center;
 }
+/* 譜面を歌に合わせる(押している間は「やめる」) */
+.chip.chip-sm.rec-sync {
+  flex: none;
+  min-width: 4.6em;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+.chip.chip-sm.rec-sync.is-on {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+.rec-dock .yt-status .btn + .btn {
+  margin-left: -4px;
+}
 .icon-btn.rec-mini {
   flex: none;
   width: 34px;

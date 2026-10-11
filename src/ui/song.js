@@ -4,9 +4,10 @@ import htm from 'htm';
 import { Icon, StarIcon, PlayIcon, GuitarIcon, PianoIcon } from './icons.js';
 import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast } from './common.js';
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
-import { useAutoScroll, glideTo, glideHeading, timelineBeats } from './autoscroll.js';
-import { useSongMusic, MusicDock, MusicPanel } from './music.js';
+import { useAutoScroll, glideTo, glideHeading, timelineBeats, timelineOf, timeAtBeat } from './autoscroll.js';
+import { useSongMusic, MusicDock, MusicPanel, loadTiming } from './music.js';
 import { segStart, tapBar } from '../music/timing.js';
+import { listenVoice, refLines, alignRecording } from '../music/voice.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
 import { sheetFromFetched } from '../music/sources.js';
 import { krcToSynced, krcCandidates } from '../lib/lyrics.js';
@@ -17,7 +18,7 @@ import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, 
 import { rankCapos, shapeName, guitarVoicings, standardVoicing, planVoicings } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { detectModulation } from '../music/modulation.js';
-import { lib, useSong, media } from '../lib/store.js';
+import { lib, useSong, media, local } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
@@ -351,28 +352,106 @@ function SongReady({ song, reload }) {
   const bpmKnown = bpmFrom === 'user' || bpmFrom === 'sheet';
 
   // ---- 自分の歌(動画・録音)に合わせる
-  // rec: この端末に置いた録音 / recOn: 録音に合わせて流すか(曲ごとに覚える) / 行の時刻の目印は録音ごとに settings.recSync に
-  const [rec, setRec] = useState(null); // { url, name, type, isVideo, fp, size, saved }
+  // rec: この端末に置いた録音 / recOn: 録音に合わせて流すか(曲ごとに覚える)
+  // 合わせ方: 録音から歌っている区間を聴き取り(voice)、原曲の歌詞の時刻(recTiming)と重ねて、行ごとの時刻を自動で決める(music/voice.js)。
+  // ずれていたら「合わせる」→ いま歌っている歌詞を1回タップ(目印 = fix.pins。録音ごとに settings.recSync に覚える)
+  const [rec, setRec] = useState(null); // { url, blob, name, type, isVideo, fp, size, saved }
   const videoRef = useRef(null);
   const recFileRef = useRef(null);
   const recOn = !!rec && (st.recOn ?? true) && !st.ytOn;
-  const recAnchors = (rec && st.recSync?.[rec.fp]) || [];
   const [recSpeed, setRecSpeed] = useState(1);
   const [recVideo, setRecVideo] = useState('small'); // small | big | hidden
   const [recTime, setRecTime] = useState({ t: 0, d: 0 });
+  const [voice, setVoice] = useState(null); // 聴き取った歌声 { fp, dur, segs, range, frac } か { fp, failed }。まだなら null
+  const [recTiming, setRecTiming] = useState(null); // 原曲の歌詞の時刻(曲と合わせるのと同じもの)。調べている間は null
+  const [recSyncing, setRecSyncing] = useState(false);
+  const [recNote, setRecNote] = useState(0); // 合わせた直後だけ出す「少しだけ直すなら 早く・遅く」
+  const listening = useRef(null);
+  const justListened = useRef(false);
   useEffect(() => {
     let url = null;
     let alive = true;
-    media.get(song.id).then((r) => {
+    media.get(song.id).then(async (r) => {
       if (!alive || !r?.blob) return;
+      const v = await local.get('voice:' + song.id);
+      if (!alive) return;
       url = URL.createObjectURL(r.blob);
-      setRec({ url, name: r.name, type: r.type, isVideo: r.isVideo, fp: r.fp, size: r.size, saved: true });
+      setVoice(v?.fp === r.fp && v.v === 1 ? v : null);
+      setRec({ url, blob: r.blob, name: r.name, type: r.type, isVideo: r.isVideo, fp: r.fp, size: r.size, saved: true });
     });
     return () => {
       alive = false;
       if (url) URL.revokeObjectURL(url);
     };
   }, [song.id]);
+  // 録音から歌声を聴き取る(録音ごとに1回。結果は手元に置く)
+  const recFp = useRef(null);
+  recFp.current = rec?.fp || null;
+  useEffect(() => () => (recFp.current = null), []);
+  useEffect(() => {
+    if (!recOn || !rec?.blob || voice?.fp === rec.fp || listening.current === rec.fp) return;
+    const fp = rec.fp;
+    listening.current = fp;
+    listenVoice(rec.blob)
+      .catch(() => ({ v: 1, failed: 'decode' }))
+      .then((v) => {
+        const got = { ...v, fp };
+        local.set('voice:' + song.id, got);
+        if (listening.current === fp) listening.current = null;
+        // 聴き取っている間に、別の録音に替えた・この曲を閉じたときは、控えるだけ
+        if (recFp.current !== fp) return;
+        justListened.current = true;
+        setVoice(got);
+      });
+  }, [recOn, rec?.fp, voice?.fp]);
+  const recSig = `${song.source}:${song.sourceId || ''}:${song.sheet.text.length}`;
+  useEffect(() => {
+    if (!recOn) return;
+    let alive = true;
+    setRecTiming(null);
+    loadTiming(song, parsed.lines, { voice: true })
+      .catch(() => ({ none: true, soft: true }))
+      .then((tm) => alive && setRecTiming(tm));
+    return () => {
+      alive = false;
+    };
+  }, [recOn, song.id, recSig]);
+  // 録音ごとの合わせ方 { pins: [{ line, pos, t }], off: 全体の微調整(秒) }。前の版は [{ line, t }](行の頭の時刻)の並びだった
+  const fix = useMemo(() => {
+    const v = rec ? st.recSync?.[rec.fp] : null;
+    return Array.isArray(v) ? { pins: v.map((a) => ({ line: a.line, pos: 0, t: a.t })), off: 0 } : { pins: v?.pins || [], off: v?.off || 0 };
+  }, [rec?.fp, st.recSync]);
+  const recTl = useMemo(() => timelineOf(parsed.lines, barsPerLine, beatsPerBar, bpm), [parsed, barsPerLine, beatsPerBar, bpm]);
+  const recBusy = recOn && (!recTiming || voice?.fp !== rec.fp);
+  // 合わせた結果(行ごとの時刻)。重ねる計算は0.5秒ほどかかるので、結果を手元に置いて、次に開いたときはそのまま使う
+  const [recFit, setRecFit] = useState(null);
+  const fitSig = recOn && !recBusy ? [rec.fp, voice.dur || 0, recTiming.sig || 'none', recTiming.at || 0, bpm, barsPerLine, beatsPerBar, JSON.stringify(fix.pins)].join('|') : null;
+  useEffect(() => {
+    if (!fitSig) {
+      setRecFit(null);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const kept = await local.get('fit:' + song.id);
+      if (!alive) return;
+      if (kept?.sig === fitSig) {
+        setRecFit(kept.fit);
+        return;
+      }
+      // 画面を先に書きかえてから計算する
+      await new Promise((r) => setTimeout(r, 30));
+      if (!alive) return;
+      const ref = refLines({ lines: parsed.lines, starts: recTl.starts, durs: recTl.durs, bps: bpm / 60, timing: recTiming.lines || null, act: recTiming.act || null });
+      const fit = alignRecording({ lines: parsed.lines, ...ref, voice: voice.segs ? voice : null, pins: fix.pins });
+      local.set('fit:' + song.id, { sig: fitSig, fit });
+      setRecFit(fit);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [fitSig]);
+  const recAnchors = useMemo(() => (recFit?.anchors || []).map((a) => ({ line: a.line, t: a.t + fix.off })), [recFit, fix.off]);
   const recClock = recOn
     ? {
         time: () => videoRef.current?.currentTime || 0,
@@ -385,8 +464,22 @@ function SongReady({ song, reload }) {
         duration: () => videoRef.current?.duration || 0,
         anchors: recAnchors,
         bps: bpm / 60,
+        sync: recSyncing,
       }
     : null;
+  // 聴き取りが終わったら、どう合わせたかを知らせる
+  useEffect(() => {
+    if (!recFit || !justListened.current) return;
+    justListened.current = false;
+    if (recFit.mode === 'voice')
+      toast(recFit.good ? `歌声を聴き取って、譜面を合わせました（${recFit.matched}行）。▶ で確かめてください` : '歌声を聴き取りました。▶ で流して、ずれていたら「合わせる」を押してください', { ms: 4500 });
+    else if (recFit.mode === 'start') toast('歌い出しを合わせました。ずれてきたら、その場所で「合わせる」を押してください', { ms: 4500 });
+  }, [recFit]);
+  useEffect(() => {
+    if (!recNote) return;
+    const t = setTimeout(() => setRecNote(0), 12000);
+    return () => clearTimeout(t);
+  }, [recNote]);
 
   // ---- 曲と合わせる(原曲の動画をアプリの中で流す。歌詞やコードを押すと、そこから曲が流れる)
   const scrollApi = useRef(null);
@@ -420,39 +513,62 @@ function SongReady({ song, reload }) {
       } catch {}
     }
     if (rec?.url) URL.revokeObjectURL(rec.url);
-    setRec({ url: URL.createObjectURL(file), name: file.name, type: file.type, isVideo, fp, size: file.size, saved });
+    setVoice(null);
+    setRecSyncing(false);
+    setRecNote(0);
+    setRec({ url: URL.createObjectURL(file), blob: file, name: file.name, type: file.type, isVideo, fp, size: file.size, saved });
     setRecVideo('small');
     setSt({ recOn: true, ytOn: false });
-    toast(saved ? '録音をこの端末に保存しました。▶ で再生して、歌い出した行をタップしてください' : '録音が大きいので、今回だけ使います（次に開いたら選び直してください）', { ms: 4500 });
+    toast(saved ? '録音をこの端末に保存しました。歌声を聴き取って、譜面を合わせます…' : '録音が大きいので、今回だけ使います（次に開いたら選び直してください）。歌声を聴き取ります…', { ms: 3500 });
   };
   const removeRec = async () => {
-    if (!confirm('この曲の録音を、この端末から消しますか？（行の時刻の目印も消えます）')) return;
+    if (!confirm('この曲の録音を、この端末から消しますか？（合わせた場所も消えます）')) return;
     scroll.stop();
     await media.del(song.id);
+    local.set('voice:' + song.id, null);
+    local.set('fit:' + song.id, null);
     if (rec?.url) URL.revokeObjectURL(rec.url);
     const sync = { ...(st.recSync || {}) };
     if (rec) delete sync[rec.fp];
     setSt({ recSync: sync, recOn: false });
     setRec(null);
+    setVoice(null);
+    setRecSyncing(false);
     setPanel(null);
   };
   const setRecOn = (on) => {
     scroll.stop();
+    setRecSyncing(false);
     setSt(on ? { recOn: true, ytOn: false } : { recOn: false });
   };
-  // 行の時刻の目印を足す(同じ行の目印は置きかえ、前後と順番が食い違う目印は外す)
-  const addAnchor = (line) => {
-    const t = +(videoRef.current?.currentTime || 0).toFixed(2);
-    const next = recAnchors.filter((a) => a.line !== line && ((a.line < line && a.t < t) || (a.line > line && a.t > t)));
-    next.push({ line, t });
-    next.sort((a, b) => a.t - b.t);
+  const saveFix = (next) => {
     const all = { ...(st.recSync || {}) };
     all[rec.fp] = next;
     // 録音は曲ごとに3つぶんまで覚える
     const keys = Object.keys(all);
     if (keys.length > 3) for (const k of keys.slice(0, keys.length - 3)) if (k !== rec.fp) delete all[k];
     setSt({ recSync: all });
-    toast(`この行を ${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')} に合わせました`, { ms: 1400 });
+  };
+  // 合わせる: いま流れているところが、押した歌詞の行。同じ行・すぐ近くの目印は置きかえ、前後と順番が食い違う目印は外す
+  const addPin = (hit) => {
+    const i = hit.i;
+    const t = +Math.max(0, (videoRef.current?.currentTime || 0) - 0.2 * recSpeed).toFixed(2);
+    const pins = fix.pins.filter((p) => p.line !== i && Math.abs(p.t - t) > 4 && ((p.line < i && p.t < t) || (p.line > i && p.t > t)));
+    pins.push({ line: i, pos: hit.pos || 0, t });
+    pins.sort((a, b) => a.t - b.t);
+    saveFix({ pins: pins.slice(-16), off: fix.off });
+    setRecSyncing(false);
+    setRecNote(Date.now());
+  };
+  // 全体を少しだけ早く・遅く
+  const nudgeRec = (d) => {
+    saveFix({ pins: fix.pins, off: Math.round((fix.off + d) * 100) / 100 });
+    setRecNote(Date.now());
+  };
+  const startRecSync = () => {
+    setRecNote(0);
+    setRecSyncing(true);
+    if (!scroll.playing) scroll.start();
   };
   useEffect(() => {
     const v = videoRef.current;
@@ -478,6 +594,10 @@ function SongReady({ song, reload }) {
       v.removeEventListener('seeked', onTime);
     };
   }, [rec?.url, recOn, scroll.playing]);
+  // 流すのをやめたら、「合わせる」もやめる
+  useEffect(() => {
+    if (!scroll.playing && recSyncing) setRecSyncing(false);
+  }, [scroll.playing]);
 
   // 曲の長さ(自動スクロールを曲に合わせるのに使う)と Apple Music の曲のページが分からない曲は、Apple の曲データから一度だけ探す
   useEffect(() => {
@@ -650,8 +770,8 @@ function SongReady({ song, reload }) {
     if (ly) pos += charAt(ly, e.clientX, e.clientY);
     return { i, k, pos, onChord };
   };
-  // 押した: 区間リピートの区間選び / 録音の時刻の目印 / そこから流す(流していればそこへ移る)。
-  // 曲と合わせているときは、押した文字・コードの時刻から曲が流れる。
+  // 押した: 区間リピートの区間選び / 自分の歌に「合わせる」目印 / そこから流す(流していればそこへ移る)。
+  // 曲と合わせているときは、押した文字・コードの時刻から曲が流れる。自分の歌に合わせているときは、押したところから録音が流れる。
   // BPM で流すときは、押したところを含む小節の頭から(メトロノームを鳴らしていれば 4・3・2・1 のあと、鳴らしていなければすぐ)
   const tapLine = (hit) => {
     const i = hit.i;
@@ -664,13 +784,15 @@ function SongReady({ song, reload }) {
       }
       return;
     }
-    if (recOn && scroll.playing) {
-      addAnchor(i);
+    if (prefs.tapToStart === false && !music.syncing && !recSyncing) return;
+    if (scroll.starts[i] == null || !scroll.durs[i]) return;
+    // 自分の歌に「合わせる」: いま流れているところが、押した歌詞
+    if (recOn && recSyncing) {
+      flashLine(i);
+      addPin(hit);
       return;
     }
-    if (prefs.tapToStart === false && !music.syncing) return;
-    if (scroll.starts[i] == null || !scroll.durs[i]) return;
-    const beat = scroll.starts[i] + (recOn ? 0 : tapBar(parsed.lines[i], hit, scroll.durs[i] / beatsPerBar) * beatsPerBar);
+    const beat = scroll.starts[i] + tapBar(parsed.lines[i], hit, scroll.durs[i] / beatsPerBar) * beatsPerBar;
     if (music.on) {
       if (!music.syncing) {
         if (scroll.loop && (i < scroll.loop.from || i > scroll.loop.to)) scroll.setLoop(null);
@@ -682,7 +804,8 @@ function SongReady({ song, reload }) {
     // 区間リピート中に区間の外を押したら、リピートはやめてそこから
     if (scroll.loop && (i < scroll.loop.from || i > scroll.loop.to)) scroll.setLoop(null);
     flashLine(i);
-    scroll.playFrom({ beat });
+    // 自分の歌: 押したところから録音が流れる(出だしが切れないよう、ほんの少し手前から)
+    scroll.playFrom({ beat, time: recOn && recAnchors.length ? Math.max(0, timeAtBeat(beat, recAnchors, recTl.starts, bpm / 60) - 0.12) : null });
   };
   const onSheetTap = (e) => {
     // 見出しなどのボタンはそれぞれの動き。コード名は、歌詞と同じ「そこから流す」(押さえ方は長押し)
@@ -740,6 +863,21 @@ function SongReady({ song, reload }) {
       toast(`かんたんモード: ${say.join('、')}${eased.length > 2 ? ` ほか${eased.length - 2}つ` : ''}`);
     }
   }, [easy, eased]);
+
+  // 自分の歌に合わせているとき、録音のつまみの上に出す一言
+  const recStatus = !recOn
+    ? null
+    : recSyncing
+      ? { kind: 'sync', text: 'いま歌っている歌詞を、1回タップしてください（その場所に合わせます）' }
+      : recBusy || !recFit
+        ? { kind: 'busy', text: voice?.fp !== rec.fp ? '歌声を聴き取っています…' : !recTiming ? '原曲の歌詞の時刻を調べています…' : '譜面を合わせています…' }
+        : recNote
+          ? { kind: 'tip', text: 'ここに合わせました。少しだけ直すなら →', nudge: true }
+          : fix.pins.length || (recFit?.mode === 'voice' && recFit.good)
+            ? null
+            : recFit?.mode === 'voice' || recFit?.mode === 'start'
+              ? { kind: 'warn', text: 'ずれているところがあったら、▶ で流しながら「合わせる」を押して、いま歌っている歌詞を1回タップしてください' }
+              : { kind: 'warn', text: '▶ で流しながら「合わせる」を押して、いま歌っている歌詞を1回タップしてください' };
 
   const capoLabel = instrument === 'guitar' ? (capo === 0 ? 'カポなし' : `カポ ${capo}`) : null;
   const flatForShape = keyPrefersFlat(shapeKey);
@@ -846,7 +984,11 @@ function SongReady({ song, reload }) {
           mode=${recVideo}
           setMode=${setRecVideo}
           time=${recTime}
-          anchors=${recAnchors.length}
+          status=${recStatus}
+          syncing=${recSyncing}
+          onSync=${startRecSync}
+          onSyncEnd=${() => setRecSyncing(false)}
+          onNudge=${nudgeRec}
           speed=${recSpeed}
           setSpeed=${setRecSpeed}
           onSeek=${(t) => {
@@ -936,17 +1078,21 @@ function SongReady({ song, reload }) {
       onClose=${() => setPanel(null)}
       rec=${rec}
       recOn=${recOn}
-      anchors=${recAnchors.length}
+      fit=${recFit}
+      voice=${voice}
+      busy=${recBusy || !recFit}
+      pins=${fix.pins.length}
+      off=${fix.off}
+      onSync=${() => { setPanel(null); startRecSync(); }}
+      onNudge=${nudgeRec}
       speed=${recSpeed}
       setSpeed=${setRecSpeed}
       video=${recVideo}
       setVideo=${setRecVideo}
       onPick=${() => recFileRef.current?.click()}
       onReset=${() => {
-        const all = { ...(st.recSync || {}) };
-        delete all[rec.fp];
-        setSt({ recSync: all });
-        toast('行の時刻の目印を消しました');
+        saveFix({ pins: [], off: 0 });
+        toast('押して合わせた場所を消して、自動の合わせ方に戻しました');
       }}
       onOff=${() => { setRecOn(false); setPanel(null); }}
       onRemove=${removeRec}
@@ -1288,8 +1434,9 @@ function Transport({ scroll, bpm, bpmKnown, click, onClick, onTempo, looping, on
 
 const mmssRec = (t) => (isFinite(t) ? `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}` : '0:00');
 
-// 動画の小窓(タップで大きく/小さく)と、再生位置のつまみ・速さ
-function RecDock({ rec, videoRef, mode, setMode, time, anchors, speed, setSpeed, onSeek }) {
+// 動画の小窓(タップで大きく/小さく)と、再生位置のつまみ・速さ・「合わせる」
+// status: つまみの上に出す一言 { kind, text, nudge?: 「早く」「遅く」を出す }
+function RecDock({ rec, videoRef, mode, setMode, time, speed, setSpeed, onSeek, status, syncing, onSync, onSyncEnd, onNudge }) {
   const cycle = () => setSpeed(speed === 1 ? 0.9 : speed === 0.9 ? 0.8 : speed === 0.8 ? 0.7 : 1);
   return html`<${React.Fragment}>
     <div className=${cx('rec-video', rec.isVideo ? 'is-' + mode : 'is-audio')} onClick=${() => rec.isVideo && setMode(mode === 'small' ? 'big' : 'small')}>
@@ -1299,8 +1446,16 @@ function RecDock({ rec, videoRef, mode, setMode, time, anchors, speed, setSpeed,
         : null}
     </div>
     <div className="rec-dock">
-      ${!anchors
-        ? html`<p className="rec-hint">▶ で再生して、<b>歌い出した行をタップ</b>すると、その行の時刻を覚えます。ずれてきたら、その都度タップで直せます。</p>`
+      ${status
+        ? html`<div className=${cx('yt-status', 'is-' + status.kind)} role="status">
+            <span>${status.text}</span>
+            ${status.nudge
+              ? html`<${React.Fragment}>
+                  <button className="btn btn-sm" onClick=${() => onNudge(-0.2)} aria-label="譜面を0.2秒早く">早く</button>
+                  <button className="btn btn-sm" onClick=${() => onNudge(0.2)} aria-label="譜面を0.2秒遅く">遅く</button>
+                </${React.Fragment}>`
+              : null}
+          </div>`
         : null}
       <div className="rec-row">
         <span className="rec-time">${mmssRec(time.t)}</span>
@@ -1316,6 +1471,9 @@ function RecDock({ rec, videoRef, mode, setMode, time, anchors, speed, setSpeed,
         />
         <span className="rec-time">${mmssRec(time.d)}</span>
         <button className=${cx('chip chip-sm rec-speed', speed !== 1 && 'is-on')} onClick=${cycle} aria-label="再生の速さ">${speed === 1 ? '1×' : speed + '×'}</button>
+        <button className=${cx('chip chip-sm rec-sync', syncing && 'is-on')} aria-pressed=${syncing} onClick=${syncing ? onSyncEnd : onSync} aria-label=${syncing ? '合わせるのをやめる' : '譜面を歌に合わせる'}>
+          ${syncing ? 'やめる' : '合わせる'}
+        </button>
         ${rec.isVideo && mode === 'hidden'
           ? html`<button className="icon-btn rec-mini" onClick=${() => setMode('small')} aria-label="映像を出す"><${Icon} name="video" size=${18} /></button>`
           : null}
@@ -1324,15 +1482,50 @@ function RecDock({ rec, videoRef, mode, setMode, time, anchors, speed, setSpeed,
   </${React.Fragment}>`;
 }
 
-function RecPanel({ open, onClose, rec, recOn, anchors, speed, setSpeed, video, setVideo, onPick, onReset, onOff, onRemove }) {
+// fit: 合わせた結果(music/voice.js の alignRecording)。voice: 聴き取った歌声。pins: 押して合わせた場所の数。off: 全体の微調整(秒)
+function RecPanel({ open, onClose, rec, recOn, fit, voice, busy, pins, off, speed, setSpeed, video, setVideo, onSync, onNudge, onPick, onReset, onOff, onRemove }) {
   if (!rec) return null;
   const mb = rec.size ? Math.round(rec.size / 1e6) : 0;
+  const how = busy
+    ? '歌声を聴き取っています…'
+    : fit?.mode === 'voice'
+      ? `歌声を聴き取って、${fit.matched}行を自動で合わせています${pins ? `（押した${pins}か所も使っています）` : ''}`
+      : fit?.mode === 'start'
+        ? 'この曲は原曲の歌詞の時刻が見つからなかったので、歌い出しだけ自動で合わせています'
+        : fit?.mode === 'pins'
+          ? `押した${pins}か所に合わせています`
+          : 'まだ合わせていません';
+  // 歌声を自動で使えなかったわけ
+  const why =
+    busy || fit?.mode === 'voice'
+      ? ''
+      : voice?.failed === 'big'
+        ? '動画が大きすぎて、歌声を聴き取れませんでした。'
+        : voice?.failed
+          ? 'この録音からは、歌声を聴き取れませんでした。'
+          : voice?.segs && fit?.mode === 'pins'
+            ? '伴奏や物音が入っていると、歌の切れ目が分からないので、押した場所だけで合わせます。'
+            : '';
+  const offTxt = Math.abs(off) < 0.05 ? '' : `${off > 0 ? '譜面を遅く' : '譜面を早く'} ${Math.abs(off).toFixed(1)}秒`;
   return html`<${Sheet} open=${open} onClose=${onClose} title="自分の歌に合わせる">
     <div className="rec-info">
       <${Icon} name=${rec.isVideo ? 'video' : 'mic'} />
       <span><b>${rec.name}</b><small>${mb ? `${mb}MB ・ ` : ''}${rec.saved ? 'この端末に保存しています（ほかの端末には送りません）' : '大きいので今回だけ（次に開いたら選び直し）'}</small></span>
     </div>
-    <p className="panel-lead">再生中に<b>歌っている行をタップ</b>すると、その行の時刻を覚え、次からは録音にぴったり合わせて譜面が流れます。全部の行でなくても、サビの頭など何か所かで十分です（あいだは自動でつなぎます）。</p>
+    <p className="panel-lead">録音の歌声を聴き取って、<b>譜面を自動で合わせます</b>。歌詞やコードを押すと、そこから録音が流れます。</p>
+    <div className="panel-field">
+      <div className="panel-field-label">譜面と歌がずれるとき<b className=${cx('speed-now', !!offTxt && 'is-on')}>${offTxt}</b></div>
+      <div className="row-gap">
+        <button className="btn btn-primary" onClick=${onSync}>歌に合わせる</button>
+        <button className="btn" onClick=${() => onNudge(-0.2)} aria-label="譜面を0.2秒早く">早く</button>
+        <button className="btn" onClick=${() => onNudge(0.2)} aria-label="譜面を0.2秒遅く">遅く</button>
+        ${pins || offTxt ? html`<button className="btn btn-ghost" onClick=${onReset}>元に戻す</button>` : null}
+      </div>
+      <p className="panel-note">
+        「歌に合わせる」を押すと録音が流れるので、<b>いま歌っている歌詞を1回タップ</b>してください。行のどこを押しても、押すのが少し遅れても大丈夫です（細かい位置は歌声から決めます）。探している間、譜面は手で動かしたところに止まります。まだずれているところがあれば、そこでもう一度。全体を少しだけ直すときは「早く」「遅く」（0.2秒ずつ）。
+      </p>
+      <p className="panel-note">いま: ${how}。${why}</p>
+    </div>
     <div className="panel-field">
       <div className="panel-field-label">再生の速さ（音程はそのまま）</div>
       <${Segmented} label="再生の速さ" value=${speed} onChange=${setSpeed} options=${[1, 0.9, 0.8, 0.7].map((v) => ({ value: v, label: v === 1 ? 'そのまま' : `${v}×` }))} />
@@ -1344,7 +1537,6 @@ function RecPanel({ open, onClose, rec, recOn, anchors, speed, setSpeed, video, 
         </div>`
       : null}
     <div className="menu-group">
-      <button className="menu-item" onClick=${onReset} disabled=${!anchors}><${Icon} name="refresh" /><span className="menu-item-text">行の時刻をやり直す<small>${anchors ? `いま ${anchors}か所 合わせています` : 'まだ合わせていません'}</small></span></button>
       <button className="menu-item" onClick=${onPick}><${Icon} name="upload" /><span className="menu-item-text">別の動画・録音を選ぶ</span></button>
       ${recOn ? html`<button className="menu-item" onClick=${onOff}><${Icon} name="metronome" /><span className="menu-item-text">録音に合わせるのをやめる（BPMで流す）</span></button>` : null}
       <button className="menu-item is-danger" onClick=${onRemove}><${Icon} name="trash" /><span className="menu-item-text">この端末から録音を消す</span></button>
@@ -1666,7 +1858,7 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner, onApple, rec 
       ${!rec
         ? html`<button className="menu-item is-accent" onClick=${onPickRec}>
             <${Icon} name="mic" />
-            <span className="menu-item-text">自分の歌（動画・録音）に合わせる<small>アカペラで撮った動画などを流しながら、譜面をいっしょに見られます</small></span>
+            <span className="menu-item-text">自分の歌（動画・録音）に合わせる<small>アカペラで撮った動画・録音を選ぶと、歌声を聴き取って、譜面を自動で合わせます</small></span>
           </button>`
         : recOn
           ? html`<button className="menu-item is-accent" onClick=${onRecPanel}><${Icon} name="mic" /><span className="menu-item-text">録音の設定<small>${rec.name}</small></span></button>`

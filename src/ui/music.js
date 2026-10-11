@@ -13,7 +13,7 @@ import { lib, local } from '../lib/store.js';
 import { getPrefs, setPrefs } from '../lib/prefs.js';
 import { findLyrics, krcToSynced, krcCandidates } from '../lib/lyrics.js';
 import { mcToSheet } from '../music/mcsheet.js';
-import { alignLines, mcDirect, mcSyncedLines, syncedLines, tapTime, rankVideos, parseYouTubeId } from '../music/timing.js';
+import { alignLines, mcDirect, mcSyncedLines, syncedLines, vocalSpans, mcSpans, tapTime, rankVideos, parseYouTubeId } from '../music/timing.js';
 import { cx, baseTitle } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
@@ -158,6 +158,8 @@ export function useYouTube(videoId, on = {}) {
         r.vid = videoId;
         r.p = new YT.Player(slot, {
           videoId,
+          // 個人に合わせた広告を出さない読み込み方(YouTube の「プライバシー強化モード」)。広告そのものはアプリからは消せないが、出にくくなる
+          host: 'https://www.youtube-nocookie.com',
           width: '100%',
           height: '100%',
           playerVars: { playsinline: 1, rel: 0, fs: 0, iv_load_policy: 3, origin: location.origin },
@@ -208,12 +210,14 @@ export function useYouTube(videoId, on = {}) {
 
 // ---------------------------------------------------------------- 譜面の行と曲の時刻を結びつける
 
-// 戻り値: { base: 'yt' | 'album', vid, src, lines, hit } か { none: true, soft: 通信できなかった }
-async function buildTiming(song, lines) {
+// 戻り値: { base: 'yt' | 'album', vid, src, lines, hit, act: 原曲で歌っている区間(自分の歌の録音を合わせるときの見本) } か { none: true, soft: 通信できなかった }
+// lyricsFirst: 時刻つき歌詞を先に探す(自分の歌の録音を合わせるとき。動画の時刻である必要は無く、文字ごとの長さまで分かる歌詞のほうがよく合う)
+async function buildTiming(song, lines, { lyricsFirst = false } = {}) {
   let soft = false;
   // この曲がコード進行メモ倉庫にもあれば、その曲データ(動画の時刻そのもの)を使う
-  const mcSlug = song.source === 'mcmemo' ? song.sourceId : (song.sources || []).find((s) => s.source === 'mcmemo')?.id;
-  if (mcSlug) {
+  const fromMc = async () => {
+    const mcSlug = song.source === 'mcmemo' ? song.sourceId : (song.sources || []).find((s) => s.source === 'mcmemo')?.id;
+    if (!mcSlug) return null;
     try {
       const r = await api('sheet', { source: 'mcmemo', id: mcSlug, title: song.title, artist: song.artist });
       if (r?.mc?.sections?.length) {
@@ -231,23 +235,48 @@ async function buildTiming(song, lines) {
         const rows = mcToSheet(r.mc, { krc: krc?.length ? krc : null, krcs: krcs?.length ? krcs : null }).rows;
         const direct = song.source === 'mcmemo' ? mcDirect(rows, lines) : null;
         const res = direct ? { lines: direct, hit: 1 } : alignLines(lines, mcSyncedLines(rows));
-        if (res) return { base: 'yt', vid: r.mc.youtubeVideoId || null, src: 'mc', lines: res.lines, hit: res.hit };
+        if (res) return { base: 'yt', vid: r.mc.youtubeVideoId || null, src: 'mc', lines: res.lines, hit: res.hit, act: mcSpans(rows) };
       }
     } catch {
       soft = true;
     }
-  }
+    return null;
+  };
   // 時刻つき歌詞(文字ごと → 行ごと)。時刻は原曲の音源のもの
-  try {
-    const f = await findLyrics({ title: song.title, artist: song.artist, durationMs: song.durationMs });
-    if (f?.synced) {
-      const res = alignLines(lines, syncedLines(f.synced));
-      if (res) return { base: 'album', vid: null, src: f.wordTimed ? 'krc' : 'lrc', lines: res.lines, hit: res.hit };
+  const fromLyrics = async () => {
+    try {
+      const f = await findLyrics({ title: song.title, artist: song.artist, durationMs: song.durationMs });
+      if (f?.synced) {
+        const res = alignLines(lines, syncedLines(f.synced));
+        if (res) return { base: 'album', vid: null, src: f.wordTimed ? 'krc' : 'lrc', lines: res.lines, hit: res.hit, act: vocalSpans(f.synced) };
+      }
+    } catch {
+      soft = true;
     }
-  } catch {
-    soft = true;
+    return null;
+  };
+  for (const from of lyricsFirst ? [fromLyrics, fromMc] : [fromMc, fromLyrics]) {
+    const tm = await from();
+    if (tm) return tm;
   }
   return { none: true, soft };
+}
+
+const timingSig = (song) => `${song.source}:${song.sourceId || ''}:${hash(song.sheet.text)}`;
+
+// 譜面の行 ↔ 曲の時刻。作ったものは手元に置いておき、譜面が変わったら作り直す。
+// voice: 自分の歌の録音を合わせるための時刻(時刻つき歌詞を先に探す。曲と合わせる用とは別に控える)
+export async function loadTiming(song, lines, { voice = false } = {}) {
+  const sig = timingSig(song);
+  const key = (voice ? 'tv1:' : 'tm2:') + song.id;
+  let tm = await local.get(key);
+  // 見つからなかった曲は3日、行ごとの時刻しか無かった曲は7日たったら、もう一度探す(歌詞のデータがあとから増えることがある)
+  const age = Date.now() - (tm?.at || 0);
+  if (!tm || tm.sig !== sig || (tm.none && age > 3 * 864e5) || (tm.src === 'lrc' && age > 7 * 864e5)) {
+    tm = { ...(await buildTiming(song, lines, { lyricsFirst: voice })), sig, at: Date.now() };
+    if (!tm.soft) local.set(key, tm);
+  }
+  return tm;
 }
 
 // ---------------------------------------------------------------- 曲の画面から使う
@@ -309,22 +338,14 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   });
 
   // 譜面の行 ↔ 曲の時刻。作ったものは手元に置いておき、譜面が変わったら作り直す
-  const sig = useMemo(() => `${song.source}:${song.sourceId || ''}:${hash(song.sheet.text)}`, [song.source, song.sourceId, song.sheet.text]);
+  const sig = useMemo(() => timingSig(song), [song.source, song.sourceId, song.sheet.text]);
   useEffect(() => {
     if (!on) return;
     let alive = true;
     setTiming(null);
-    (async () => {
-      const key = 'tm2:' + song.id;
-      let tm = await local.get(key);
-      // 見つからなかった曲は3日、行ごとの時刻しか無かった曲は7日たったら、もう一度探す(歌詞のデータがあとから増えることがある)
-      const age = Date.now() - (tm?.at || 0);
-      if (!tm || tm.sig !== sig || (tm.none && age > 3 * 864e5) || (tm.src === 'lrc' && age > 7 * 864e5)) {
-        tm = { ...(await buildTiming(song, lines)), sig, at: Date.now() };
-        if (!tm.soft) local.set(key, tm);
-      }
-      if (alive) setTiming(tm);
-    })();
+    loadTiming(song, lines)
+      .catch(() => ({ none: true, soft: true }))
+      .then((tm) => alive && setTiming(tm));
     return () => {
       alive = false;
     };
@@ -408,7 +429,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   const bps = !anchors.length && even && even > (bpm / 60) * 0.6 && even < (bpm / 60) * 1.7 ? even : bpm / 60;
   const clock =
     on && video
-      ? { time: yt.api.time, seekTime: yt.api.seek, play: yt.api.play, pause: yt.api.pause, ended: yt.api.ended, duration: () => yt.api.duration() || dur, anchors, bps }
+      ? { time: yt.api.time, seekTime: yt.api.seek, play: yt.api.play, pause: yt.api.pause, ended: yt.api.ended, duration: () => yt.api.duration() || dur, anchors, bps, sync: syncing }
       : null;
 
   const nextT = (i) => {
@@ -659,6 +680,6 @@ export function MusicPanel({ open, onClose, video, cands, loadCands, pick, pickU
       <button className="menu-item" onClick=${() => { onClose(); onApple(); }}><${Icon} name="headphones" /><span className="menu-item-text">Apple Music で原曲を開く<small>Music アプリで聴くとき（譜面とは連動しません）</small></span></button>
       <button className="menu-item" onClick=${() => { onClose(); onOff(); }}><${Icon} name="metronome" /><span className="menu-item-text">曲と合わせるのをやめる（BPMで流す）</span></button>
     </div>
-    <p className="panel-note">動画は YouTube のものをそのまま流すので、YouTube 側で広告が入ることがあります。PC の Chrome など、YouTube に広告が出ない状態のブラウザでは、ここでも出ません。動画は曲ごとに一度だけ読み込み、歌詞を押しても読み直しません。</p>
+    <p className="panel-note">広告は YouTube が動画の中に入れるもので、アプリからは消せません。出にくくなるよう、個人に合わせた広告を出さない読み込み方（YouTube のプライバシー強化モード）にして、動画は曲ごとに一度だけ読み込み、歌詞を押しても読み直しません。それでも入ることはあります。</p>
   </${Sheet}>`;
 }
