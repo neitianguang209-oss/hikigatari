@@ -10,15 +10,17 @@ const html = htm.bind(React.createElement);
 // 上が1弦・下が6弦、左端がナット。開放弦○とミュート×はナットの左に置く(U-FRET などと同じ向き)
 // 見た目は U-FRET に寄せて簡素に: 線は画面上でいつも1pxの細さ、ナットはまっすぐな太線、点は塗りの丸、セーハは細い棒
 
-export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120, fingers = true, compact = false }) {
+// mini: 歌詞の上に出す小さい図(何フレットめかの数字を、図に対してさらに大きく書く)
+export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120, fingers = true, compact = false, mini = false }) {
   if (!voicing) return html`<div className="gd-none" style=${{ width }}>図なし</div>`;
   const v = voicing;
   const W = 100;
-  const H = compact ? 80 : 78;
+  // 下の余白は、何フレットめかの数字(大きめ)のぶん
+  const H = mini ? 93 : compact ? 88 : 80;
   const left = compact ? 14 : 13;
   const right = 2;
   const top = 5;
-  const bottom = compact ? 11 : 12;
+  const bottom = mini ? 24 : compact ? 19 : 14;
   const cols = compact ? 4 : 5;
   const fretW = (W - left - right) / cols;
   const gap = (H - top - bottom) / 5;
@@ -60,7 +62,7 @@ export const GuitarDiagram = memo(function GuitarDiagram({ voicing, width = 120,
     if (fingers && !compact && fg && (!inBarre || s === v.barre.to))
       parts.push(html`<text key=${'n' + s} x=${xOf(f)} y=${yOf(s) + 2.5} className="gd-finger" textAnchor="middle">${fg}</text>`);
   });
-  return html`<svg className=${'gdiagram' + (compact ? ' is-compact' : '')} width=${width} height=${(width * H) / W} viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="押さえ方の図">${parts}</svg>`;
+  return html`<svg className=${'gdiagram' + (compact ? ' is-compact' : '') + (mini ? ' is-mini' : '')} width=${width} height=${(width * H) / W} viewBox=${`0 0 ${W} ${H}`} role="img" aria-label="押さえ方の図">${parts}</svg>`;
 });
 
 // 「いつもこの押さえ方」で選んだ形(フレットを","でつないだ文字列)があればそれ、無ければいちばんやさしい形

@@ -1362,7 +1362,7 @@ export function SheetPreview({ lines }) {
 
 const MiniDiagram = memo(function MiniDiagram({ name, instrument, pick }) {
   if (instrument === 'piano') return html`<span className="mini-diagram mini-staff"><${StaffDiagram} name=${name} width=${46} /></span>`;
-  return html`<span className="mini-diagram"><${GuitarDiagram} voicing=${chosenVoicing(name, pick)} width=${52} fingers=${false} compact=${true} /></span>`;
+  return html`<span className="mini-diagram"><${GuitarDiagram} voicing=${chosenVoicing(name, pick)} width=${52} fingers=${false} compact=${true} mini=${true} /></span>`;
 });
 
 function ChordStrip({ names, instrument, onTap, vertical = false, picks = null }) {

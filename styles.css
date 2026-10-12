@@ -1315,12 +1315,16 @@ textarea {
   stroke-width: 1px;
   stroke-linecap: square;
 }
+/* 何フレットめかの数字(セーハで上のほうを押さえる形)。歌詞の上の小さい図でも読めるよう、大きく・太く・はっきりした色で */
 .gd-frlabel {
-  fill: var(--muted);
-  font: 600 9px var(--font);
+  fill: var(--text);
+  font: 700 11px var(--font);
 }
 .gdiagram.is-compact .gd-frlabel {
-  font-size: 11px;
+  font-size: 18px;
+}
+.gdiagram.is-mini .gd-frlabel {
+  font-size: 24px;
 }
 .gd-none {
   font-size: 0.7rem;
