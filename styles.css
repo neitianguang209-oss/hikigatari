@@ -4526,3 +4526,19 @@ body:has(.rec-dock) .toast-host {
 .vfx-done .row-gap {
   margin-top: 8px;
 }
+
+/* 30秒だけ聴く: 歌い始め・サビ・Cメロ */
+.kh-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip.kh-part {
+  height: 40px;
+  padding: 0 16px;
+  gap: 6px;
+}
+.chip.kh-part:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

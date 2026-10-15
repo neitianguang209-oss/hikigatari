@@ -286,6 +286,7 @@ export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
       r.src = null;
       r.playing = false;
       r.off = dur();
+      r.done = true; // 最後まで流れた(次に流すときは頭から)
       hold(false);
       setUi((u) => ({ ...u, state: 0 }));
       cb.current?.();
@@ -301,6 +302,7 @@ export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
     api.current = {
       time: () => heard(),
       seek(t) {
+        r.done = false;
         const to = Math.max(0, Math.min(t, Math.max(0, dur() - 0.05)));
         if (r.playing) startAt(to);
         else r.off = to;
@@ -311,7 +313,10 @@ export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
         // iPhone は押した瞬間に音の出口を開ける
         audioCtx();
         if (!r.node || !r.buf || r.playing) return;
-        if (r.off >= dur() - 0.05) r.off = 0;
+        if (r.done) {
+          r.off = 0;
+          r.done = false;
+        }
         startAt(r.off);
         setUi((u) => ({ ...u, state: 1 }));
       },

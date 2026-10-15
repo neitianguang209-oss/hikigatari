@@ -184,6 +184,13 @@ function usePreview({ active, getTrack, semis, voice = 'orig', cacheKey }) {
   return { ui, pos: { t: pos.t, d: pos.d || shared.orig?.duration || 0 }, play, pause, seek, setWhich };
 }
 
+// 30秒だけ聴くところ
+const PARTS = [
+  { mark: 'start', label: '歌い始め' },
+  { mark: 'chorus', label: 'サビ' },
+  { mark: 'bridge', label: 'Cメロ' },
+];
+
 const VOICES = [
   { value: 'orig', label: '歌手の声のまま' },
   { value: 'male', label: '男性っぽく' },
@@ -203,9 +210,9 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
     onBeforePreview?.();
     pv.play();
   };
-  const full = (from) => {
+  const full = (from, opt) => {
     pv.pause();
-    onPlayFull(from);
+    onPlayFull(from, opt);
   };
   const removeOwn = () => {
     if (!confirm('この曲の音源を外しますか？（この端末とクラウドから消えます。元のファイルはそのままです）')) return;
@@ -242,7 +249,24 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
     </div>
 
     <div className="panel-field">
-      <div className="panel-field-label">試聴で聴いてみる<small className="kh-sub">30秒・サビのあたり</small></div>
+      <div className="panel-field-label">30秒だけ聴く<small className="kh-sub">${keyTxt}${has ? '・自分の音源から' : ''}</small></div>
+      <div className="kh-parts" role="group" aria-label="聴くところ">
+        ${PARTS.map((p) => {
+          const at = marks[p.mark];
+          // 自分の音源があれば、その場所から30秒。無ければ Apple の試聴(サビのあたり)だけ
+          const can = has ? at != null : p.mark === 'chorus';
+          return html`<button key=${p.mark} className=${cx('chip kh-part', can && 'is-on')} disabled=${!can || ui.stage === 'load'} onClick=${() => (has ? full(p.mark, { clip: 30 }) : ui.playing ? pv.pause() : playPreview())}>
+            <${PlayIcon} playing=${!has && p.mark === 'chorus' && ui.playing} size=${14} />${p.label}
+          </button>`;
+        })}
+      </div>
+      ${has
+        ? html`<p className="panel-note">押すと、そこの少し手前から30秒、${keyTxt}で流れて止まります（途中で歌詞を押せば、そのまま流れつづけます）。${marks.bridge == null ? 'この譜面では Cメロ の場所が分からなかったので、Cメロは歌詞を押して流してください。' : ''}</p>`
+        : html`<p className="panel-note">いまは Apple の試聴（サビのあたり30秒）だけ聴けます。<b>歌い始め・Cメロ</b>も選ぶには、上の「音源ファイルを選ぶ」で自分の音源を入れてください（試聴の長さと場所は Apple が決めていて、変えられません）。</p>`}
+    </div>
+
+    <div className="panel-field" hidden=${has}>
+      <div className="panel-field-label">Apple の試聴<small className="kh-sub">30秒・サビのあたり</small></div>
       <div className="kh-row">
         <button className=${cx('kh-play', ui.playing && 'is-on')} onClick=${ui.playing ? pv.pause : playPreview} disabled=${ui.stage === 'load'} aria-label=${ui.playing ? '止める' : 'このキーで試聴を流す'}>
           <${PlayIcon} playing=${ui.playing} size=${20} />
@@ -269,7 +293,7 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
           </div>`
         : null}
       ${ui.err ? html`<p className="kh-err" role="alert">${ui.err}</p>` : null}
-      <p className="panel-note">試聴は Apple が選んだ30秒（たいていサビのあたり）で、長さも場所も変えられません（ほかの配信サービスの試聴も同じでした）。歌い始めから聴くには、上の「1曲まるごと」を使ってください。</p>
+      <p className="panel-note">原曲キーと押し比べられます。</p>
       <button className="kh-apple" onClick=${onApple}><${Icon} name="apple" size=${15} />試聴は Apple Music から（Apple Music でこの曲を開く）</button>
     </div>
   </div>`;

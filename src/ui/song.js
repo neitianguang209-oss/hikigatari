@@ -571,20 +571,28 @@ function SongReady({ song, reload }) {
     }
   };
   // キーのパネルから: 自分の音源を、このキーで流す(パネルを閉じて、いまの場所から)
-  // from: 'start'(歌い始め) | 'chorus'(サビの頭) | null(止めたところから)。歌い始め・サビは2秒手前から(前奏の終わりから入れるように)
-  const playOwnFull = (from = null) => {
+  // from: 'start'(歌い始め) | 'chorus'(サビの頭) | 'bridge'(Cメロ) | null(止めたところから)。2秒手前から(前の部分の終わりから入れるように)
+  // clip: その秒数だけ流して止める(30秒だけ聴く)
+  const clipTimer = useRef(0);
+  const playOwnFull = (from = null, { clip = 0 } = {}) => {
     audioCtx(); // iPhone は押した瞬間に音の出口を開ける
     setPanel(null);
-    const line = from === 'start' ? marks.start : from === 'chorus' ? marks.chorus : null;
-    if (music.on && music.mine && music.clock) {
+    clearTimeout(clipTimer.current);
+    const line = from === 'start' ? marks.start : from === 'chorus' ? marks.chorus : from === 'bridge' ? marks.bridge : null;
+    const go = () => {
       if (line != null) playLineFrom(line);
       else if (!scroll.playing) scroll.start();
-      return;
-    }
+      if (clip) clipTimer.current = setTimeout(() => scroll.stop(), ((clip + 2) / (music.dock.speed || 1)) * 1000);
+    };
+    if (music.on && music.mine && music.clock) return go();
     if (!music.on) music.toggle(true);
     else music.panel.setSource('own');
-    pendingStart.current = { line };
+    pendingStart.current = { go };
   };
+  // 自分で止めた・ほかの場所を押したら、30秒の止めは取り消す
+  useEffect(() => {
+    if (!scroll.playing) clearTimeout(clipTimer.current);
+  }, [scroll.playing]);
   const playLineFrom = (i) => {
     if (scroll.starts[i] == null) return scroll.start();
     flashLine(i);
@@ -595,8 +603,7 @@ function SongReady({ song, reload }) {
     const p = pendingStart.current;
     if (p && music.mine && music.clock) {
       pendingStart.current = null;
-      if (p.line != null) playLineFrom(p.line);
-      else scroll.start();
+      p.go();
     }
   }, [music.mine, !!music.clock]);
 
@@ -875,6 +882,7 @@ function SongReady({ song, reload }) {
   // 曲と合わせているときは、押した文字・コードの時刻から曲が流れる。自分の歌に合わせているときは、押したところから録音が流れる。
   // BPM で流すときは、押したところを含む小節の頭から(メトロノームを鳴らしていれば 4・3・2・1 のあと、鳴らしていなければすぐ)
   const tapLine = (hit) => {
+    clearTimeout(clipTimer.current); // 30秒だけ聴いている途中に押したら、そのまま流しつづける
     const i = hit.i;
     if (loopSel) {
       if (loopSel.step === 'from') setLoopSel({ step: 'to', from: i });
@@ -1733,39 +1741,51 @@ function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, ea
 }
 
 // 歌い始め(最初に歌詞を歌う行)と、サビの頭の行。サビは「サビ」の見出しがあればそこ、無ければ、
-// くり返し出てくる歌詞が2行以上つづくかたまり(長いものほどサビらしい。同じくらいなら先に出てくるもの)の頭
+// くり返し出てくる歌詞が2行以上つづくかたまり(長いものほどサビらしい。同じくらいなら先に出てくるもの)の頭。
+// Cメロ: 「Cメロ」「ブリッジ」の見出し → 無ければ、2回目のサビのあとに出てくる、ほかに出てこない歌詞の頭(最後のサビより前)
 export function songMarks(lines) {
   const text = (l) => (l.segs || []).map((s) => s.t || '').join('');
   const sung = (l) => l.type === 'lyric' && text(l).replace(/[\s　\-=>|・.○●ー－~()（）]/g, '').length > 1;
+  const afterLabel = (re) => {
+    const lab = lines.findIndex((l) => l.type === 'label' && re.test(l.text || ''));
+    return lab >= 0 ? lines.findIndex((l, i) => i > lab && sung(l)) : -1;
+  };
   const start = lines.findIndex(sung);
   let chorus = lines.findIndex((l) => l.chorus && sung(l));
-  // 「サビ」「Chorus」などの見出しのすぐあとの歌詞
-  if (chorus < 0) {
-    const lab = lines.findIndex((l) => l.type === 'label' && /サビ|ｻﾋﾞ|chorus|hook/i.test(l.text || ''));
-    if (lab >= 0) chorus = lines.findIndex((l, i) => i > lab && sung(l));
-  }
+  // 「サビ」「Chorus」などの見出しのすぐあとの歌詞(「大サビ」は除く)
+  if (chorus < 0) chorus = afterLabel(/^(?!.*大).*(サビ|ｻﾋﾞ|chorus|hook)/i);
   const sure = chorus >= 0; // 譜面にサビと書いてある
-  if (chorus < 0) {
-    const idx = [];
-    lines.forEach((l, i) => sung(l) && idx.push(i));
-    const keys = idx.map((i) => norm(text(lines[i])));
-    const count = new Map();
-    for (const k of keys) count.set(k, (count.get(k) || 0) + 1);
-    const runs = [];
-    let from = -1;
-    for (let j = 0; j <= keys.length; j++) {
-      const rep = j < keys.length && keys[j].length >= 4 && count.get(keys[j]) >= 2;
-      if (rep && from < 0) from = j;
-      if (!rep && from >= 0) {
-        if (j - from >= 2) runs.push({ at: from, len: j - from });
-        from = -1;
+  let bridge = afterLabel(/Cメロ|Ｃメロ|C\s*melo|bridge|ブリッジ|ｃメロ/i);
+  // くり返しの歌詞のかたまり
+  const idx = [];
+  lines.forEach((l, i) => sung(l) && idx.push(i));
+  const keys = idx.map((i) => norm(text(lines[i])));
+  const count = new Map();
+  for (const k of keys) count.set(k, (count.get(k) || 0) + 1);
+  const runs = [];
+  let from = -1;
+  for (let j = 0; j <= keys.length; j++) {
+    const rep = j < keys.length && keys[j].length >= 4 && count.get(keys[j]) >= 2;
+    if (rep && from < 0) from = j;
+    if (!rep && from >= 0) {
+      if (j - from >= 2) runs.push({ at: from, len: j - from });
+      from = -1;
+    }
+  }
+  const longest = Math.max(0, ...runs.map((r) => r.len));
+  const big = runs.filter((r) => r.len >= Math.max(2, longest * 0.6));
+  if (chorus < 0 && big.length) chorus = idx[big[0].at];
+  if (bridge < 0 && big.length >= 2) {
+    const end2 = big[1].at + big[1].len;
+    const last = big.length >= 3 ? big[big.length - 1].at : keys.length;
+    for (let j = end2; j < last; j++) {
+      if (count.get(keys[j]) === 1 && keys[j].length >= 4) {
+        bridge = idx[j];
+        break;
       }
     }
-    const longest = Math.max(0, ...runs.map((r) => r.len));
-    const pick = runs.find((r) => r.len >= Math.max(2, longest * 0.6));
-    if (pick) chorus = idx[pick.at];
   }
-  return { start: start >= 0 ? start : null, chorus: chorus >= 0 ? chorus : null, sure };
+  return { start: start >= 0 ? start : null, chorus: chorus >= 0 ? chorus : null, bridge: bridge >= 0 ? bridge : null, sure };
 }
 
 function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, marks, voice, setVoice, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {

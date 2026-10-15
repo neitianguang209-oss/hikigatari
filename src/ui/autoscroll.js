@@ -63,10 +63,15 @@ export function songFit(totalBeats, bpm, durationMs) {
 // anchors: [{ line, t }] = 「この行はこの時刻に始まる」の目印(歌を聴きながら行をタップして作る)。
 // 目印と目印のあいだは拍どおりに割り振り、前後ははみ出しぶんを近くの速さで伸ばす。目印が無ければ BPM どおり
 function points(anchors, starts) {
-  return (anchors || [])
-    .filter((a) => starts[a.line] != null)
+  const p = (anchors || [])
+    .filter((a) => starts[a.line] != null && isFinite(a.t))
     .map((a) => [a.t, starts[a.line]])
     .sort((x, y) => x[0] - y[0]);
+  // 時刻の順に並べたとき、拍が戻ってしまう目印(くり返しの歌詞が別の回に結びついたものなど)は使わない。
+  // 戻りがあると、そのあいだの行の時刻が計算できず、曲の頭から流れてしまっていた
+  const out = [];
+  for (const q of p) if (!out.length || q[1] > out[out.length - 1][1]) out.push(q);
+  return out;
 }
 export function beatAtTime(t, anchors, starts, bps) {
   const p = points(anchors, starts);
