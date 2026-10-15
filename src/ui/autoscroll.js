@@ -178,6 +178,31 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   // 読む位置 = 画面の真ん中
   const anchor = () => (scrollRef.current ? scrollRef.current.clientHeight * READ_AT : 300);
+  // 1行目・2行目など、画面の真ん中より上にある行から流し始めたとき: 真ん中まで待たずにすぐ動き出し、
+  // その行のいまの高さから、少しずつ真ん中へ寄せていく(以前は真ん中に来るまで画面が止まったままに見えた)
+  const anchorAt = (b) => {
+    const base = anchor();
+    const rp = s.ramp;
+    if (!rp) return base;
+    const d = posAtBeat(b) - rp.p0;
+    if (d >= rp.R) {
+      s.ramp = null;
+      return base;
+    }
+    return rp.y + (base - rp.y) * easeSine(Math.max(0, d) / rp.R);
+  };
+  // 拍 b から流し始める(移る)ときに呼ぶ。その場所が真ん中に置けない(上すぎる)ときだけ、寄せ方を決める
+  const setRamp = (b) => {
+    const base = anchor();
+    const p0 = posAtBeat(b);
+    if (p0 >= base) {
+      s.ramp = null;
+      return;
+    }
+    const y = Math.max(0, p0);
+    // 寄せる長さは、ずれの 2.2 倍ぶん読み進めるあいだ(そのあいだも画面は止まらず、いつもの3割以上の速さで動く)
+    s.ramp = { y, p0, R: Math.max(40, 2.2 * (base - y)) };
+  };
   // 行の目印の高さ = 行の真ん中
   const midOf = (i) => (s.tops[i] ?? 0) + (s.heights[i] || 0) / 2;
 
@@ -284,7 +309,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         s.free = false;
         s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
       }
-      if (!s.holding && !s.free) setScroll(posAtBeat(eff) - anchor());
+      if (!s.holding && !s.free) setScroll(posAtBeat(eff) - anchorAt(eff));
       highlight(eff);
       if (ts - s.lastProg > 250) {
         s.lastProg = ts;
@@ -322,7 +347,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         setCountdown(0);
       }
     }
-    if (!s.holding) setScroll(posAtBeat(eff) - anchor());
+    if (!s.holding) setScroll(posAtBeat(eff) - anchorAt(eff));
     highlight(eff);
     if (ts - s.lastProg > 250) {
       s.lastProg = ts;
@@ -408,6 +433,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
         if (b < a || b >= e) clockSeek(a);
       }
       if (live.current.clock.ended()) live.current.clock.seekTime(0);
+      setRamp(fromBeat ?? clockBeat());
       live.current.clock.play();
       s.holding = false;
       s.playingFlag = true;
@@ -432,6 +458,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       if (b < a || b >= e) b = a;
     }
     s.startBeat = b >= s.tl.total ? 0 : b;
+    setRamp(s.startBeat);
     const { countIn: ci, beatsPerBar: bpb } = live.current;
     s.countEnd = ci ? s.startBeat : null;
     s.holding = false;
@@ -450,6 +477,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const stop = () => {
     live.current.clock?.pause();
+    s.ramp = null;
     s.playingFlag = false;
     s.free = false;
     clearInterval(s.tick);
@@ -491,6 +519,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     setCountdown(0);
     s.holding = false;
     s.beat = s.startBeat = b;
+    setRamp(b);
     setBeat(b, 0.03);
     s.sched = b - 1;
     tickClicks();
@@ -504,6 +533,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       if (s.playingFlag) {
         s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
         clockSeek(b);
+        setRamp(b);
       } else {
         clockSeek(b);
         glideTo(scrollRef.current, midOf(i) - anchor());
@@ -537,6 +567,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
     if (time != null) c.seekTime(Math.max(0, Math.min((c.duration() || Infinity) - 0.05, time)));
     else clockSeek(beat);
+    setRamp(clockBeat());
     c.play();
     s.holding = false;
     if (s.playingFlag) return;
@@ -573,6 +604,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       if (!s.holding && !live.current.clock) s.frozenBeat = beatNow();
       s.holding = true;
       s.glide = null;
+      s.ramp = null;
       clearTimeout(s.idle);
       s.idle = setTimeout(() => {
         measure();

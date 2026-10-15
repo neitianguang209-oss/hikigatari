@@ -286,7 +286,7 @@ export async function loadTiming(song, lines, { voice = false } = {}) {
 
 // scrollApi: useAutoScroll の戻り値を入れておく ref(このフックの時計を自動スクロールに渡すので、順番の都合で ref 経由)
 // own: useOwnAudio の戻り値(自分の音源)。semis: いまのキー(自分の音源はそのキーで流す)
-export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollApi, own, semis = 0 }) {
+export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollApi, own, semis = 0, voice = 'orig' }) {
   const on = !!st.ytOn;
   // 自分の音源があれば、それを流す(YouTube にしたいときは settings.musicSrc = 'yt')
   const mine = !!own?.own && st.musicSrc !== 'yt';
@@ -345,7 +345,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   });
 
   // 自分の音源(流し終わったら譜面も止める)
-  const mp = useOwnPlayer(on && mine ? own.rec : null, { semis, onEnd: () => scrollApi.current?.stop() });
+  const mp = useOwnPlayer(on && mine ? own.rec : null, { semis, voice, onEnd: () => scrollApi.current?.stop() });
   const player = mine ? mp : yt;
 
   // 譜面の行 ↔ 曲の時刻。作ったものは手元に置いておき、譜面が変わったら作り直す。
@@ -452,7 +452,8 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   };
 
   // 譜面を押した。hit: { i, k, pos, onChord }。beat: その場所の拍(時刻の分からない行で使う)
-  const tap = (hit, beat) => {
+  // opt.lead: 押した場所の何秒前から流すか(歌い始め・サビの頭から聴くときは、少し手前から)
+  const tap = (hit, beat, opt = {}) => {
     const s = scrollApi.current;
     if (!ready) {
       if (mine)
@@ -491,7 +492,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
       setTip(false);
       setPrefs({ musicTapSeen: true });
     }
-    s?.playFrom({ beat, time: t != null ? Math.max(0, t + offAt(t) - LEAD) : null });
+    s?.playFrom({ beat, time: t != null ? Math.max(0, t + offAt(t) - (opt.lead ?? LEAD)) : null });
   };
   // 全体を少しだけ早く・遅く(目印が無ければ、全体をずらす目印を1つ置く)
   const nudge = (d) => {
@@ -593,6 +594,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     on,
     video,
     mine,
+    anchors, // 行の頭の時刻(ずれの直しを足したもの) [{ line, t }]
     clock,
     tap,
     toggle,

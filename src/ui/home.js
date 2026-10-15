@@ -4,7 +4,7 @@ import htm from 'htm';
 import { Icon, StarIcon, Logo } from './icons.js';
 import { Artwork, Spinner, Empty, Segmented, toast } from './common.js';
 import { lib, useLibrary, useSyncState } from '../lib/store.js';
-import { api, lookupAppleMusic } from '../lib/api.js';
+import { api, apiRetry, lookupAppleMusic } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
 import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed, artworkUrl, tileColor } from '../lib/util.js';
@@ -274,7 +274,8 @@ const searchCache = new Map();
 
 export function Search({ q }) {
   const L = useLibrary();
-  const [state, setState] = useState({ loading: true, error: null, groups: [] });
+  const [state, setState] = useState({ loading: true, error: null, groups: [], retry: 0 });
+  const [round, setRound] = useState(0); // 「もう一度探す」を押した回数
   useEffect(() => {
     if (!q) return;
     rememberQuery(q);
@@ -283,19 +284,31 @@ export function Search({ q }) {
       setState({ loading: false, error: null, ...searchCache.get(q) });
       return;
     }
-    setState({ loading: true, error: null, groups: [] });
-    api('search', { q })
+    setState({ loading: true, error: null, groups: [], retry: 0 });
+    // つながりにくいときは自動で何回か問い合わせ直す(アプリを裏にして戻ってきたときも、すぐ出し直す)
+    apiRetry('search', { q }, { onRetry: (n) => alive && setState((s) => ({ ...s, retry: n })) })
       .then((r) => {
         if (!alive) return;
         const res = { groups: r.groups || [], artists: r.artists || [], understood: r.understood || null };
         searchCache.set(q, res);
         setState({ loading: false, error: null, ...res });
       })
-      .catch((e) => alive && setState({ loading: false, error: e.message, groups: [] }));
+      .catch((e) => alive && setState({ loading: false, error: e.status === 0 ? (navigator.onLine ? 'つながりにくいようです。電波のよいところで、もう一度探してください' : 'オフラインです。つながったら自動でもう一度探します') : e.message, groups: [], soft: e.status === 0 }));
     return () => {
       alive = false;
     };
-  }, [q]);
+  }, [q, round]);
+  // つながらなくて止まったときは、つながった・アプリに戻ってきたら自動でもう一度
+  useEffect(() => {
+    if (!state.error || !state.soft) return;
+    const again = () => document.visibilityState === 'visible' && navigator.onLine && setRound((n) => n + 1);
+    window.addEventListener('online', again);
+    document.addEventListener('visibilitychange', again);
+    return () => {
+      window.removeEventListener('online', again);
+      document.removeEventListener('visibilitychange', again);
+    };
+  }, [state.error, state.soft]);
 
   // 保存済みの曲からも探す(オフラインでも出る)
   const local = useMemo(() => {
@@ -336,11 +349,16 @@ export function Search({ q }) {
       ${!state.loading && state.understood ? html`<p className="understood">「<b>${state.understood}</b>」として探しました</p>` : null}
       ${state.loading
         ? html`<div className="search-loading">
-            <${Spinner} label="U-FRET・ChordWiki・歌ネットを探しています…" />
+            <${Spinner} label=${state.retry ? `つながりにくいので、もう一度探しています…（${state.retry + 1}回め）` : 'U-FRET・ChordWiki・歌ネットを探しています…'} />
             <ul className="song-list skeleton">${[0, 1, 2, 3].map((i) => html`<li key=${i} className="song-row"><span className="sk-art"></span><span className="sk-lines"><i></i><i></i></span></li>`)}</ul>
           </div>`
         : state.error
-          ? html`<${Empty} icon="cloudOff" title="探せませんでした">${state.error}</${Empty}>`
+          ? html`<${Empty} icon="cloudOff" title="探せませんでした">
+              ${state.error}
+              <span className="row-gap center" style=${{ marginTop: 12 }}>
+                <button className="btn btn-sm btn-primary" onClick=${() => setRound((n) => n + 1)}><${Icon} name="refresh" size=${16} /> もう一度探す</button>
+              </span>
+            </${Empty}>`
           : !withSheets.length
             ? html`<${Empty} icon="search" title="譜面が見つかりませんでした">
                 曲名だけ・アーティスト名だけでも探してみてください。<br />
@@ -451,7 +469,7 @@ export function OpenFrom({ params }) {
       // 2) 検索して、曲名とアーティストが一致する譜面があれば直接開く
       const q = `${baseTitle(title)} ${artist}`.trim();
       try {
-        const r = await api('search', { q });
+        const r = await apiRetry('search', { q });
         const hit = (r.groups || []).find((g) => g.sources.length && norm(g.title) === norm(baseTitle(title)) && (!artist || sameArtist(g.artist, artist)));
         if (hit) {
           await openGroup(hit, { replace: true });

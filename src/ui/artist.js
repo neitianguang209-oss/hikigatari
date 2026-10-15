@@ -4,7 +4,7 @@ import htm from 'htm';
 import { Icon, StarIcon } from './icons.js';
 import { Artwork, Spinner, Empty, Segmented, toast } from './common.js';
 import { useLibrary } from '../lib/store.js';
-import { api } from '../lib/api.js';
+import { apiRetry } from '../lib/api.js';
 import { go, back } from '../lib/router.js';
 import { cx, norm, baseTitle, sameArtist, sourceName } from '../lib/util.js';
 import { openGroup } from './home.js';
@@ -25,7 +25,7 @@ export function ArtistPage({ params }) {
     if (!name || cache.has(name)) return;
     let alive = true;
     setState({ loading: true, songs: [] });
-    api('artist', { name, unId: params.un || '' })
+    apiRetry('artist', { name, unId: params.un || '' })
       .then((r) => {
         if (r.songs?.length) cache.set(name, r);
         if (alive) setState({ loading: false, ...r });
@@ -68,7 +68,7 @@ export function ArtistPage({ params }) {
       const q = `${s.title} ${artist}`;
       let g = null;
       try {
-        const r = await api('search', { q });
+        const r = await apiRetry('search', { q });
         g = (r.groups || []).find((x) => x.sources.length && norm(baseTitle(x.title)) === norm(s.title) && sameArtist(x.artist, artist));
       } catch (e) {
         if (!s.uf?.length && !s.more?.length) throw e;

@@ -19,6 +19,59 @@ function herm(xm1, x0, x1, x2, t) {
   return ((a * t - b) * t + c) * t + x0;
 }
 
+// FFT の表(大きさ n)
+function fftTables(n) {
+  const h = n >> 1;
+  const cs = new Float64Array(h);
+  const sn = new Float64Array(h);
+  for (let i = 0; i < h; i++) {
+    cs[i] = Math.cos((TWO_PI * i) / n);
+    sn[i] = -Math.sin((TWO_PI * i) / n);
+  }
+  const bits = Math.log2(n);
+  const rev = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    let r = 0;
+    for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b);
+    rev[i] = r;
+  }
+  return { n, rev, cs, sn };
+}
+function fftRun({ n, rev, cs, sn }, re, im) {
+  for (let i = 0; i < n; i++) {
+    const j = rev[i];
+    if (j > i) {
+      let t = re[i];
+      re[i] = re[j];
+      re[j] = t;
+      t = im[i];
+      im[i] = im[j];
+      im[j] = t;
+    }
+  }
+  for (let size = 2; size <= n; size <<= 1) {
+    const hs = size >> 1;
+    const step = n / size;
+    for (let i = 0; i < n; i += size) {
+      for (let j = 0, k = 0; j < hs; j++, k += step) {
+        const a = i + j;
+        const b = a + hs;
+        const c = cs[k];
+        const s = sn[k];
+        const tr = re[b] * c - im[b] * s;
+        const ti = re[b] * s + im[b] * c;
+        re[b] = re[a] - tr;
+        im[b] = im[a] - ti;
+        re[a] += tr;
+        im[a] += ti;
+      }
+    }
+  }
+}
+
+// 声の響き(フォルマント)の位置。歌手の声のまま = 1、男性っぽく・女性っぽく = 響きを下げる・上げる
+export const VOICE_FORMANT = { orig: 1, male: 0.85, female: 1.18 };
+
 export class KeyShifter {
   constructor(sampleRate, { block = 128 } = {}) {
     // 窓は約85ミリ秒(低い音の倍音まで分けられる長さ)。重ねは8つ
@@ -29,20 +82,20 @@ export class KeyShifter {
     this.Ha = N >> 3;
     this.win = new Float32Array(N);
     for (let i = 0; i < N; i++) this.win[i] = 0.5 - 0.5 * Math.cos((TWO_PI * i) / N);
-    // FFT の表
-    this.cs = new Float64Array(half);
-    this.sn = new Float64Array(half);
-    for (let i = 0; i < half; i++) {
-      this.cs[i] = Math.cos((TWO_PI * i) / N);
-      this.sn[i] = -Math.sin((TWO_PI * i) / N);
-    }
-    const bits = Math.log2(N);
-    this.rev = new Uint32Array(N);
-    for (let i = 0; i < N; i++) {
-      let r = 0;
-      for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b);
-      this.rev[i] = r;
-    }
+    this.tab = fftTables(N);
+    // 声の響き(フォルマント)を保つための、ならした音色(スペクトルの外形)。4つおきの箱で、ケプストラムでならす
+    this.fmt = null; // null = 高さといっしょに響きも動く / 数 = 響きを元の何倍の位置に置くか(1 = 歌手の声のまま)
+    const P = N >> 2;
+    this.P = P;
+    this.ftab = fftTables(P);
+    this.cre = new Float64Array(P);
+    this.cim = new Float64Array(P);
+    this.envL = new Float64Array((P >> 1) + 1);
+    this.fg = new Float64Array(half + 1);
+    this.lift = new Float64Array(P);
+    this.Lc = 0;
+    this.sr = sampleRate;
+    this.binHz = sampleRate / N;
     this.re = new Float64Array(N);
     this.im = new Float64Array(N);
     const B = half + 1;
@@ -236,35 +289,82 @@ export class KeyShifter {
   }
 
   fft(re, im) {
-    const { N, rev, cs, sn } = this;
-    for (let i = 0; i < N; i++) {
-      const j = rev[i];
-      if (j > i) {
-        let t = re[i];
-        re[i] = re[j];
-        re[j] = t;
-        t = im[i];
-        im[i] = im[j];
-        im[j] = t;
+    fftRun(this.tab, re, im);
+  }
+
+  // 声の響き(フォルマント)。null = 高さといっしょに動く(下げると男っぽく・上げると子どもっぽく)、数 = 元の響きの何倍の位置に置くか
+  setFormant(f) {
+    this.fmt = f == null || !isFinite(f) ? null : Math.max(0.5, Math.min(2, f));
+  }
+
+  // 外形をならす細かさ(ケプストラムの何番目まで残すか)。山を通る外形(true envelope)にするので細かめでよい。
+  // 合成の母音(声の高さ 130〜440Hz・-5/+3)で試して、元の響きとの差がいちばん小さかった 約2.9ミリ秒(44.1kHz で 130)
+  setLifter() {
+    const { P, sr } = this;
+    const Lc = Math.round(sr / 340);
+    if (Lc === this.Lc) return;
+    this.Lc = Lc;
+    for (let n = 0; n < P; n++) {
+      const q = Math.min(n, P - n);
+      this.lift[n] = q <= Lc ? (0.5 + 0.5 * Math.cos((Math.PI * q) / (Lc + 1))) / P : 0;
+    }
+  }
+
+  // この こまの音色の外形(対数)を作り、箱ごとの音量の直し(fg)を決める。
+  // 箱 k の音は最後に k×r の高さになるので、そこで元の外形の「k×r÷響きの倍率」の位置の大きさになるようにする
+  formantGains() {
+    const { m2, half, P, cre, cim, envL, lift, fg, r, fmt, binHz } = this;
+    const Q = P >> 1;
+    let mx = 0;
+    for (let k = 0; k <= half; k++) if (m2[k] > mx) mx = m2[k];
+    const floor = mx * 1e-9 + 1e-24;
+    for (let m = 0; m <= Q; m++) {
+      const k0 = m * 4;
+      let v = 0;
+      for (let k = Math.max(0, k0 - 2), e = Math.min(half, k0 + 2); k <= e; k++) if (m2[k] > v) v = m2[k];
+      const lg = 0.5 * Math.log(v + floor);
+      cre[m] = lg;
+      if (m > 0 && m < Q) cre[P - m] = lg;
+    }
+    // 倍音のすき間(谷)に引っぱられないよう、ならした外形が倍音の山を通るまで持ち上げる(true envelope。10回くり返す)
+    const A = this.envA || (this.envA = new Float64Array(Q + 1));
+    for (let m = 0; m <= Q; m++) A[m] = cre[m];
+    for (let it = 0; it < 10; it++) {
+      for (let m = 0; m <= Q; m++) {
+        cre[m] = A[m];
+        if (m > 0 && m < Q) cre[P - m] = A[m];
+      }
+      cim.fill(0);
+      fftRun(this.ftab, cre, cim);
+      if (it === 0) this.setLifter();
+      for (let n = 0; n < P; n++) {
+        cre[n] *= lift[n];
+        cim[n] = 0;
+      }
+      fftRun(this.ftab, cre, cim);
+      for (let m = 0; m <= Q; m++) {
+        envL[m] = cre[m];
+        if (A[m] < cre[m]) A[m] = cre[m];
       }
     }
-    for (let size = 2; size <= N; size <<= 1) {
-      const hs = size >> 1;
-      const step = N / size;
-      for (let i = 0; i < N; i += size) {
-        for (let j = 0, k = 0; j < hs; j++, k += step) {
-          const a = i + j;
-          const b = a + hs;
-          const c = cs[k];
-          const s = sn[k];
-          const tr = re[b] * c - im[b] * s;
-          const ti = re[b] * s + im[b] * c;
-          re[b] = re[a] - tr;
-          im[b] = im[a] - ti;
-          re[a] += tr;
-          im[a] += ti;
-        }
+    const envAt = (x) => {
+      const m = x / 4;
+      if (m >= Q) return envL[Q];
+      const i = Math.floor(m);
+      const f = m - i;
+      return envL[i] * (1 - f) + envL[i + 1] * f;
+    };
+    const ratio = r / fmt;
+    for (let k = 0; k <= half; k++) {
+      // 声の響きが大事なのは 5kHz くらいまで。それより上は少しずつ直すのをやめる(高い音のざらつきを持ち上げないように)
+      const fOut = k * r * binHz;
+      const w = fOut < 5000 ? 1 : fOut > 8000 ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * (fOut - 5000)) / 3000);
+      if (w <= 0) {
+        fg[k] = 1;
+        continue;
       }
+      const d = envAt(k * ratio) - envAt(k);
+      fg[k] = Math.exp(w * Math.max(-4, Math.min(2.3, d)));
     }
   }
 
@@ -319,6 +419,8 @@ export class KeyShifter {
       pc[q] = Math.cos(t);
       ps[q] = Math.sin(t);
     }
+    // 声の響きを保つときは、箱ごとの音量の直しも決めておく(高さが変わらないときは直さない)
+    const fg = this.fmt != null && Math.abs(r / this.fmt - 1) > 1e-3 ? (this.formantGains(), this.fg) : null;
     // それぞれの箱は、いちばん近い山と同じだけ回す。左右に同じ回転をかけて、逆 FFT 用に並べる(共役にしておく)
     let q = 0;
     for (let k = 0; k <= half; k++) {
@@ -334,6 +436,10 @@ export class KeyShifter {
         }
       }
       th[k] = t;
+      if (fg) {
+        c *= fg[k];
+        s *= fg[k];
+      }
       const ylr = lr[k] * c - li[k] * s;
       const yli = lr[k] * s + li[k] * c;
       const yrr = rr[k] * c - ri[k] * s;
@@ -413,9 +519,11 @@ export function shifterLatency(sampleRate, semis) {
 
 // 音のかたまり(左・右)をまとめてキーを変える。出てくる音は元と同じ長さ・同じ時刻にそろえる。
 // 画面が止まらないよう、少しずつ計算して合間に休む。onProgress(0〜1)。cancelled() が true になったらやめる(null を返す)
-export async function shiftChannels(L, R, sampleRate, semis, { onProgress = null, cancelled = null } = {}) {
+// formant: 声の響きの倍率(VOICE_FORMANT。null なら高さといっしょに動く)
+export async function shiftChannels(L, R, sampleRate, semis, { onProgress = null, cancelled = null, formant = null } = {}) {
   const ks = new KeyShifter(sampleRate);
   ks.setSemitones(semis);
+  ks.setFormant(formant);
   const lat = ks.latency;
   const n = L.length;
   const total = n + lat;

@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon, PlayIcon } from './icons.js';
 import { Segmented } from './common.js';
-import { shiftChannels } from '../music/keyshift.js';
+import { shiftChannels, VOICE_FORMANT } from '../music/keyshift.js';
 import { decodeAudio } from '../music/earcopy.js';
 import { audioCtx, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { cx, signed } from '../lib/util.js';
@@ -36,7 +36,8 @@ function loudness(buf) {
   return v;
 }
 
-function usePreview({ active, getTrack, semis, cacheKey }) {
+// voice: 声(VOICE_FORMANT の名前)。キーを変えないときも、男性っぽく・女性っぽくなら変える
+function usePreview({ active, getTrack, semis, voice = 'orig', cacheKey }) {
   if (shared.key !== cacheKey) Object.assign(shared, { key: cacheKey, orig: null, cache: new Map() });
   const r = useRef({ src: null, startAt: 0, offset: 0, which: 'key', token: 0 }).current;
   const [ui, setUi] = useState({ stage: 'idle', playing: false, prog: 0, err: '', which: 'key' });
@@ -59,7 +60,7 @@ function usePreview({ active, getTrack, semis, cacheKey }) {
   };
   // 原曲キーで聴き比べるときは、キーを変えた音と同じ大きさに(キーを変えた音は音割れ止めのぶん少し小さい)
   const gainFor = (buf) => {
-    const k = buf === shared.orig && semis ? shared.cache.get(semis) : null;
+    const k = buf === shared.orig && (semis || voice !== 'orig') ? shared.cache.get(semis + '|' + voice) : null;
     return k ? Math.min(1, loudness(k) / Math.max(1e-6, loudness(shared.orig))) : 1;
   };
   const startBuf = (buf, at) => {
@@ -76,29 +77,31 @@ function usePreview({ active, getTrack, semis, cacheKey }) {
     r.startAt = c.currentTime - off;
     r.offset = off;
   };
-  // そのキーの音(作ったものは4つまで覚える)
+  // そのキー・声の音(作ったものは4つまで覚える)
   const bufFor = async (s) => {
-    if (!s) return shared.orig;
-    if (shared.cache.has(s)) return shared.cache.get(s);
+    if (!s && voice === 'orig') return shared.orig;
+    const key = s + '|' + voice;
+    if (shared.cache.has(key)) return shared.cache.get(key);
     const tok = r.token;
     const o = shared.orig;
     setUi((u) => ({ ...u, stage: 'shift', prog: 0 }));
     const y = await shiftChannels(o.getChannelData(0), o.numberOfChannels > 1 ? o.getChannelData(1) : null, o.sampleRate, s, {
       onProgress: (p) => tok === r.token && setUi((u) => ({ ...u, prog: p })),
       cancelled: () => tok !== r.token,
+      formant: VOICE_FORMANT[voice] ?? 1,
     });
     if (!y) return null;
     const b = audioCtx().createBuffer(2, o.length, o.sampleRate);
     b.copyToChannel(y.L, 0);
     b.copyToChannel(y.R, 1);
-    shared.cache.set(s, b);
+    shared.cache.set(key, b);
     if (shared.cache.size > 4) shared.cache.delete(shared.cache.keys().next().value);
     return b;
   };
   // 流すもの(このキー or 原曲キー)を、いまの位置のまま入れかえる
   const swap = async (which, s) => {
     const tok = ++r.token;
-    const b = await bufFor(which === 'orig' ? 0 : s);
+    const b = which === 'orig' ? shared.orig : await bufFor(s);
     if (!b || tok !== r.token) return;
     const playing = !!r.src;
     const at = now();
@@ -121,7 +124,7 @@ function usePreview({ active, getTrack, semis, cacheKey }) {
         shared.orig = await decodeAudio(ab);
         if (tok !== r.token) return releasePlayback();
       }
-      const b = await bufFor(r.which === 'orig' ? 0 : semis);
+      const b = r.which === 'orig' ? shared.orig : await bufFor(semis);
       if (!b || tok !== r.token) return releasePlayback();
       halt();
       startBuf(b, r.offset);
@@ -156,7 +159,7 @@ function usePreview({ active, getTrack, semis, cacheKey }) {
   // キーを変えたら、流している音もそのキーに(作り終わるまでは前の音のまま)
   useEffect(() => {
     if (shared.orig && r.which === 'key' && (ui.playing || shared.cache.size)) swap('key', semis);
-  }, [semis]);
+  }, [semis, voice]);
   // パネルを閉じたら止める
   useEffect(() => {
     if (!active) pause();
@@ -180,30 +183,46 @@ function usePreview({ active, getTrack, semis, cacheKey }) {
   return { ui, pos: { t: pos.t, d: pos.d || shared.orig?.duration || 0 }, play, pause, seek, setWhich };
 }
 
-// キーのパネルの中: 試聴をこのキーで / 1曲まるごと(自分の音源)
-// own: useOwnAudio の戻り値。mine: いま自分の音源で流している。onPlayFull: パネルを閉じて、自分の音源をこのキーで流す
-export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, onApple, own, mine, onPickOwn, onUseOwn, onPlayFull, onBeforePreview }) {
-  const pv = usePreview({ active, getTrack, semis, cacheKey: songId });
+const VOICES = [
+  { value: 'orig', label: '歌手の声のまま' },
+  { value: 'male', label: '男性っぽく' },
+  { value: 'female', label: '女性っぽく' },
+];
+
+// キーのパネルの中: 声 / 1曲まるごと(自分の音源。歌い始め・サビから) / 試聴30秒(サビのあたり)
+// own: useOwnAudio の戻り値。mine: いま自分の音源で流している。marks: { start, chorus }(行の番号)
+// onPlayFull(from): パネルを閉じて、自分の音源をこのキーで流す(from = 'start' | 'chorus' | null)
+export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, onApple, own, mine, marks = {}, voice = 'orig', setVoice, onPickOwn, onUseOwn, onPlayFull, onBeforePreview }) {
+  const pv = usePreview({ active, getTrack, semis, voice, cacheKey: songId });
   const { ui, pos } = pv;
   const busy = ui.stage === 'load' || ui.stage === 'shift';
-  const busyText = ui.stage === 'load' ? '試聴を読み込んでいます…' : `${signed(semis)} に変えています… ${Math.round(ui.prog * 100)}%`;
+  const busyText = ui.stage === 'load' ? '試聴を読み込んでいます…' : `${semis ? signed(semis) : '原曲キー'}・${VOICES.find((v) => v.value === voice)?.label} に変えています… ${Math.round(ui.prog * 100)}%`;
   const has = !!own?.own;
   const playPreview = () => {
     onBeforePreview?.();
     pv.play();
   };
-  const full = () => {
+  const full = (from) => {
     pv.pause();
-    onPlayFull();
+    onPlayFull(from);
   };
+  const keyTxt = semis ? `${signed(semis)}（${keyLabel}）` : '原曲キー';
   return html`<div className="kh">
     <div className="panel-field">
-      <div className="panel-field-label">1曲まるごと、このキーで<small className="kh-sub">${has ? '自分の音源・広告なし' : 'iPhone・iPad・パソコン'}</small></div>
+      <div className="panel-field-label">声<small className="kh-sub">キーを変えて聴くときの声の感じ</small></div>
+      <${Segmented} size="sm" label="声" value=${voice} onChange=${setVoice} options=${VOICES} />
+      <p className="panel-note">「歌手の声のまま」は、高さだけ変えて声の感じ（響き）は元の歌手のまま。女性の歌を下げても女性の声で聞こえます。「男性っぽく」「女性っぽく」は響きを低く・高くします。</p>
+    </div>
+
+    <div className="panel-field">
+      <div className="panel-field-label">1曲まるごと、${keyTxt}で<small className="kh-sub">${has ? '自分の音源・広告なし' : 'iPhone・iPad・パソコン'}</small></div>
       ${has && mine
         ? html`<div className="kh-full-row">
-              <button className="btn btn-primary kh-full" onClick=${full}><${PlayIcon} playing=${false} size=${18} />${semis ? `${signed(semis)}（${keyLabel}）で流す` : '原曲キーで流す'}</button>
+              <button className="btn btn-primary kh-full" onClick=${() => full('start')} disabled=${marks.start == null}><${PlayIcon} playing=${false} size=${18} />歌い始めから</button>
+              <button className="btn kh-full" onClick=${() => full('chorus')} disabled=${marks.chorus == null}><${PlayIcon} playing=${false} size=${18} />サビから</button>
+              <button className="btn btn-ghost kh-full" onClick=${() => full(null)}>続きから</button>
             </div>
-            <p className="panel-note">歌詞やコードを押すと、そこからこの高さで流れます。流しながらキーを変えても、その場で切りかわります。</p>`
+            <p className="panel-note">歌い始め・サビは、少し手前（前奏の終わり）から流れます。${marks.chorus == null ? 'この譜面ではサビの場所が分からなかったので、サビは歌詞を押して流してください。' : ''}流しながらキーや声を変えても、その場で切りかわります。</p>`
         : has
           ? html`<div className="kh-full-row">
                 <button className="btn btn-primary kh-full" onClick=${onUseOwn}><${Icon} name="music" size=${18} />自分の音源で流す</button>
@@ -212,16 +231,16 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
           : html`<div className="kh-full-row">
                 <button className="btn btn-primary kh-full" onClick=${onPickOwn}><${Icon} name="upload" size=${18} />音源ファイルを選ぶ</button>
               </div>
-              <p className="panel-note">自分で持っている原曲のファイル（買った曲・CD から取り込んだ曲など）を入れると、1曲まるごとこのキーで流せます。広告も入りません。一度入れれば、ほかの端末でもそのまま使えます。</p>`}
+              <p className="panel-note">自分で持っている原曲のファイル（買った曲・CD から取り込んだ曲など）を入れると、<b>歌い始めから・サビから</b>を選んで、1曲まるごとこのキーで流せます。広告も入りません。一度入れれば、ほかの端末でもそのまま使えます。</p>`}
     </div>
 
     <div className="panel-field">
-      <div className="panel-field-label">試聴で聴いてみる<small className="kh-sub">30秒（サビのことが多い）</small></div>
+      <div className="panel-field-label">試聴で聴いてみる<small className="kh-sub">30秒・サビのあたり</small></div>
       <div className="kh-row">
         <button className=${cx('kh-play', ui.playing && 'is-on')} onClick=${ui.playing ? pv.pause : playPreview} disabled=${ui.stage === 'load'} aria-label=${ui.playing ? '止める' : 'このキーで試聴を流す'}>
           <${PlayIcon} playing=${ui.playing} size=${20} />
         </button>
-        ${semis !== 0
+        ${semis !== 0 || voice !== 'orig'
           ? html`<${Segmented}
               size="sm"
               label="聴く高さ"
@@ -229,7 +248,7 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
               onChange=${pv.setWhich}
               options=${[
                 { value: 'orig', label: `原曲 ${origLabel}` },
-                { value: 'key', label: `${signed(semis)}（${keyLabel}）` },
+                { value: 'key', label: semis ? `${signed(semis)}（${keyLabel}）` : '声を変えたもの' },
               ]}
             />`
           : html`<span className="kh-hint">キーを変えると、その高さで流れます</span>`}
@@ -243,7 +262,7 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
           </div>`
         : null}
       ${ui.err ? html`<p className="kh-err" role="alert">${ui.err}</p>` : null}
-      <p className="panel-note">流しながら上の − ＋ でキーを変えると、その高さに切りかわります。「原曲」と押し比べると、どれくらい下がる（上がる）かが分かります。</p>
+      <p className="panel-note">試聴は Apple が選んだ30秒（たいていサビのあたり）で、長さも場所も変えられません（ほかの配信サービスの試聴も同じでした）。歌い始めから聴くには、上の「1曲まるごと」を使ってください。</p>
       <button className="kh-apple" onClick=${onApple}><${Icon} name="apple" size=${15} />試聴は Apple Music から（Apple Music でこの曲を開く）</button>
     </div>
   </div>`;

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 
 const KEY = 'hk.prefs';
-const PREFS_VERSION = 4;
+const PREFS_VERSION = 5;
 
 export const DEFAULT_PREFS = {
   instrument: 'guitar', // guitar | piano
@@ -16,7 +16,8 @@ export const DEFAULT_PREFS = {
   fontScale: 1,
   barsPerLine: 0, // 小節線の無い譜面で、歌詞1行を何小節とみなすか(0 = コード数と歌詞の長さから自動)
   countIn: true,
-  click: false,
+  click: false, // メトロノーム(クリック音)。標準は鳴らさない。曲ごとに下のバーで入れられる
+  voice: 'orig', // キーを変えて聴くときの声: orig(歌手の声のまま) | male(男性っぽく) | female(女性っぽく)
   clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
   showCurrent: false, // 流しているあいだ、今の行に色を付ける(標準はオフ。BPM の時計と実際の歌がずれて見えるため)
@@ -41,6 +42,8 @@ function load() {
     delete saved.tapToTurn; // 「何も無いところを押して画面を送る」は「タップしたところから流す」に変えた
     // v4: 「今の行に色を付ける」の標準をオフにしたので、古い保存値は捨てる
     if (!saved.v || saved.v < 4) delete saved.showCurrent;
+    // v5: メトロノームは標準で鳴らさない(ユーザーの希望。前にオンにしていた端末も、いったんオフに戻す)
+    if (!saved.v || saved.v < 5) delete saved.click;
     return { ...DEFAULT_PREFS, ...saved, v: PREFS_VERSION };
   } catch {
     return { ...DEFAULT_PREFS, v: PREFS_VERSION };

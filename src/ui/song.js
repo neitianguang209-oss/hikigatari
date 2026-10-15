@@ -7,7 +7,8 @@ import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChord
 import { useAutoScroll, glideTo, glideHeading, timelineBeats, timelineOf, timeAtBeat } from './autoscroll.js';
 import { useSongMusic, MusicDock, MusicPanel, loadTiming } from './music.js';
 import { KeyHear } from './keyhear.js';
-import { useOwnAudio, mb, CLOUD_MAX } from './ownaudio.js';
+import { useOwnAudio, decodeOwn, mb, CLOUD_MAX } from './ownaudio.js';
+import { findClipIn } from '../music/hook.js';
 import { segStart, tapBar } from '../music/timing.js';
 import { listenVoice, refLines, alignRecording } from '../music/voice.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
@@ -488,7 +489,43 @@ function SongReady({ song, reload }) {
   const totalBeats = useMemo(() => timelineBeats(parsed.lines, barsPerLine, beatsPerBar, bpm), [parsed, barsPerLine, beatsPerBar, bpm]);
   // 自分の音源(持っている原曲のファイル)。曲と合わせるで流すときに、この端末に無ければクラウドから取ってくる
   const own = useOwnAudio(song, { need: !!st.ytOn && !!st.own && st.musicSrc !== 'yt' });
-  const music = useSongMusic({ song, st, setSt, lines: parsed.lines, bpm, totalBeats, scrollApi, own, semis: transpose });
+  const music = useSongMusic({ song, st, setSt, lines: parsed.lines, bpm, totalBeats, scrollApi, own, semis: transpose, voice: prefs.voice || 'orig' });
+  // 歌い始め(最初に歌う行)とサビの頭
+  const textMarks = useMemo(() => songMarks(parsed.lines), [parsed]);
+  // サビの場所: 譜面に書いてなければ、Apple の試聴(たいていサビ)が自分の音源のどこにあたるかを音で探す(曲と音源ごとに1回。手元に覚える)
+  const [hookT, setHookT] = useState(null);
+  const ownFp = own.rec?.fp || null;
+  useEffect(() => {
+    setHookT(null);
+    if (textMarks.sure || !ownFp || !music.mine || !music.on) return;
+    let alive = true;
+    (async () => {
+      const key = 'hook1:' + song.id;
+      const saved = await local.get(key);
+      if (saved?.fp === ownFp) {
+        if (alive) setHookT(saved.t);
+        return;
+      }
+      try {
+        const it = await appleTrackOf(song);
+        if (!it?.previewUrl) return;
+        const [full, clip] = await Promise.all([decodeOwn(own.rec.blob, ownFp), (async () => decodeAudio(await (await fetch(it.previewUrl)).arrayBuffer()))()]);
+        const hit = await findClipIn(full, clip);
+        local.set(key, { fp: ownFp, t: hit?.t ?? null, at: Date.now() });
+        if (alive) setHookT(hit?.t ?? null);
+      } catch {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [song.id, ownFp, music.mine, music.on, textMarks.sure]);
+  const marks = useMemo(() => {
+    if (hookT == null || !music.anchors.length) return textMarks;
+    // 試聴の始まり(少し手前から始まることが多い)のすぐあとに歌い出す行
+    const sung = new Set(parsed.lines.map((l, i) => (l.type === 'lyric' ? i : -1)).filter((i) => i >= 0));
+    const a = music.anchors.find((x) => x.t >= hookT - 1 && sung.has(x.line));
+    return a ? { ...textMarks, chorus: a.line } : textMarks;
+  }, [textMarks, hookT, music.anchors]);
   const clock = music.clock || recClock;
 
   // スタート前のカウント(4・3・2・1)は、メトロノームを鳴らしているときだけ。鳴らしていないときは、押したらすぐ流れる
@@ -528,22 +565,32 @@ function SongReady({ song, reload }) {
     }
   };
   // キーのパネルから: 自分の音源を、このキーで流す(パネルを閉じて、いまの場所から)
-  const playOwnFull = () => {
+  // from: 'start'(歌い始め) | 'chorus'(サビの頭) | null(止めたところから)。歌い始め・サビは2秒手前から(前奏の終わりから入れるように)
+  const playOwnFull = (from = null) => {
     audioCtx(); // iPhone は押した瞬間に音の出口を開ける
     setPanel(null);
-    if (music.on && music.mine) {
-      if (!scroll.playing) scroll.start();
+    const line = from === 'start' ? marks.start : from === 'chorus' ? marks.chorus : null;
+    if (music.on && music.mine && music.clock) {
+      if (line != null) playLineFrom(line);
+      else if (!scroll.playing) scroll.start();
       return;
     }
     if (!music.on) music.toggle(true);
     else music.panel.setSource('own');
-    pendingStart.current = true;
+    pendingStart.current = { line };
   };
-  const pendingStart = useRef(false);
+  const playLineFrom = (i) => {
+    if (scroll.starts[i] == null) return scroll.start();
+    flashLine(i);
+    music.tap({ i, k: 0, pos: 0, onChord: false }, scroll.starts[i], { lead: 2 });
+  };
+  const pendingStart = useRef(null);
   useEffect(() => {
-    if (pendingStart.current && music.mine && music.clock) {
-      pendingStart.current = false;
-      scroll.start();
+    const p = pendingStart.current;
+    if (p && music.mine && music.clock) {
+      pendingStart.current = null;
+      if (p.line != null) playLineFrom(p.line);
+      else scroll.start();
     }
   }, [music.mine, !!music.clock]);
 
@@ -1089,8 +1136,11 @@ function SongReady({ song, reload }) {
       song=${song}
       own=${own}
       mine=${music.on && music.mine}
+      marks=${marks}
+      voice=${prefs.voice || 'orig'}
+      setVoice=${(v) => setPrefs({ voice: v })}
       onPickOwn=${() => { setPanel(null); pickOwn(); }}
-      onUseOwn=${playOwnFull}
+      onUseOwn=${() => playOwnFull(null)}
       onPlayFull=${playOwnFull}
       onBeforePreview=${() => scroll.playing && scroll.stop()}
       onApple=${onApple}
@@ -1676,7 +1726,43 @@ function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, ea
   </${Sheet}>`;
 }
 
-function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
+// 歌い始め(最初に歌詞を歌う行)と、サビの頭の行。サビは「サビ」の見出しがあればそこ、無ければ、
+// くり返し出てくる歌詞が2行以上つづくかたまり(長いものほどサビらしい。同じくらいなら先に出てくるもの)の頭
+export function songMarks(lines) {
+  const text = (l) => (l.segs || []).map((s) => s.t || '').join('');
+  const sung = (l) => l.type === 'lyric' && text(l).replace(/[\s　\-=>|・.○●ー－~()（）]/g, '').length > 1;
+  const start = lines.findIndex(sung);
+  let chorus = lines.findIndex((l) => l.chorus && sung(l));
+  // 「サビ」「Chorus」などの見出しのすぐあとの歌詞
+  if (chorus < 0) {
+    const lab = lines.findIndex((l) => l.type === 'label' && /サビ|ｻﾋﾞ|chorus|hook/i.test(l.text || ''));
+    if (lab >= 0) chorus = lines.findIndex((l, i) => i > lab && sung(l));
+  }
+  const sure = chorus >= 0; // 譜面にサビと書いてある
+  if (chorus < 0) {
+    const idx = [];
+    lines.forEach((l, i) => sung(l) && idx.push(i));
+    const keys = idx.map((i) => norm(text(lines[i])));
+    const count = new Map();
+    for (const k of keys) count.set(k, (count.get(k) || 0) + 1);
+    const runs = [];
+    let from = -1;
+    for (let j = 0; j <= keys.length; j++) {
+      const rep = j < keys.length && keys[j].length >= 4 && count.get(keys[j]) >= 2;
+      if (rep && from < 0) from = j;
+      if (!rep && from >= 0) {
+        if (j - from >= 2) runs.push({ at: from, len: j - from });
+        from = -1;
+      }
+    }
+    const longest = Math.max(0, ...runs.map((r) => r.len));
+    const pick = runs.find((r) => r.len >= Math.max(2, longest * 0.6));
+    if (pick) chorus = idx[pick.at];
+  }
+  return { start: start >= 0 ? start : null, chorus: chorus >= 0 ? chorus : null, sure };
+}
+
+function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, marks, voice, setVoice, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
   return html`<${Sheet} open=${open} onClose=${onClose} title="キー（曲の高さ）">
     <p className="panel-lead">自分の声に合わせて曲全体の高さを変えます。${instrument === 'guitar' ? 'ギターのカポ位置も自動で選び直します。' : ''}</p>
     <div className="key-big">
@@ -1697,6 +1783,9 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, 
       onApple=${() => { onClose(); onApple(); }}
       own=${own}
       mine=${mine}
+      marks=${marks}
+      voice=${voice}
+      setVoice=${setVoice}
       onPickOwn=${onPickOwn}
       onUseOwn=${onUseOwn}
       onPlayFull=${onPlayFull}

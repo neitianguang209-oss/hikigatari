@@ -29,13 +29,15 @@ export function onUnpaired(fn) {
   return () => listeners.delete(fn);
 }
 
-// url: 本体とは別の Edge Function を呼ぶとき(動画を探す hikigatari-yt)
-export async function api(action, payload = {}, { timeout = 30000, url = FN_URL } = {}) {
+// url: 本体とは別の Edge Function を呼ぶとき(動画を探す hikigatari-yt)。signal: 外から打ち切るとき
+export async function api(action, payload = {}, { timeout = 30000, url = FN_URL, signal = null } = {}) {
   const headers = { 'content-type': 'application/json' };
   const key = deviceKey.get();
   if (key) headers['x-hk-key'] = key;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
+  const outer = () => ctrl.abort();
+  signal?.addEventListener('abort', outer);
   try {
     const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ action, ...payload }), signal: ctrl.signal });
     const j = await r.json().catch(() => ({}));
@@ -61,7 +63,50 @@ export async function api(action, payload = {}, { timeout = 30000, url = FN_URL 
     throw e;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', outer);
   }
+}
+
+// つながりにくいときも、あきらめずに何回か問い合わせる(検索など)。
+// ・時間切れ・つながらない(status 0)ときだけやり直す(サーバーが「無い」と答えたときはそのまま)
+// ・iPhone・iPad はアプリを裏にすると通信が止まったままになることがあるので、表に戻ったら待たずにやり直す
+// ・オフラインなら、つながるまで待ってから
+// onRetry(n): n 回めのやり直しを始めるとき
+export async function apiRetry(action, payload = {}, { tries = 3, timeout = 20000, onRetry = null, url } = {}) {
+  let last = null;
+  for (let n = 0; n < tries; n++) {
+    if (n > 0) onRetry?.(n);
+    if (!navigator.onLine) await waitOnline(15000);
+    const ctrl = new AbortController();
+    let hidden = document.visibilityState === 'hidden';
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') hidden = true;
+      else if (hidden) ctrl.abort(); // 裏から戻ってきた: いまの問い合わせは止まっているかもしれないので、すぐ出し直す
+    };
+    document.addEventListener('visibilitychange', onVis);
+    try {
+      return await api(action, payload, { timeout: timeout + n * 5000, signal: ctrl.signal, ...(url ? { url } : {}) });
+    } catch (e) {
+      last = e;
+      if (e.status !== 0) throw e;
+      if (n < tries - 1 && !ctrl.signal.aborted) await new Promise((r) => setTimeout(r, 800 * (n + 1)));
+    } finally {
+      document.removeEventListener('visibilitychange', onVis);
+    }
+  }
+  throw last;
+}
+
+function waitOnline(ms) {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(t);
+      window.removeEventListener('online', done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    window.addEventListener('online', done);
+  });
 }
 
 // Apple Music の共有URL → 曲名・アーティスト(iTunes Lookup は CORS 可)

@@ -11,7 +11,7 @@ import { AUDIO_FN_URL } from '../config.js';
 import { audioCtx, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { decodeAudio } from '../music/earcopy.js';
 import { aacFromMp4 } from '../music/voice.js';
-import { shifterLatency } from '../music/keyshift.js';
+import { shifterLatency, VOICE_FORMANT } from '../music/keyshift.js';
 
 export const CLOUD_MAX = 40 * 1024 * 1024; // クラウドに置けるのは1曲 40MB まで
 const LOCAL_MAX = 400 * 1024 * 1024;
@@ -222,12 +222,14 @@ function workletReady(ctx) {
 
 // rec: { blob, fp, name } を流す。戻り値は YouTube のプレーヤー(useYouTube)と同じ形 { ui, api }(自動スクロールの時計に使う)。
 // semis: キー(半音)。速さを変えても音の高さは変わらないよう、そのぶんもキーで戻す
-export function useOwnPlayer(rec, { semis = 0, onEnd } = {}) {
+export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
   const [ui, setUi] = useState({ ready: false, state: -1, blocked: false, error: null });
   const cb = useRef(onEnd);
   cb.current = onEnd;
-  const r = useRef({ buf: null, ctx: null, node: null, gain: null, src: null, t0: 0, off: 0, rate: 1, semis, playing: false, want: false, held: false, name: '' }).current;
+  const r = useRef({ buf: null, ctx: null, node: null, gain: null, src: null, t0: 0, off: 0, rate: 1, semis, voice, playing: false, want: false, held: false, name: '' }).current;
   const total = () => r.semis + 12 * Math.log2(1 / r.rate);
+  // 声の響き: 速さを変えた(速く・遅く読んだ)ぶんも響きが動くので、そのぶんも戻す
+  const fmt = () => (VOICE_FORMANT[r.voice] ?? 1) / r.rate;
   const lag = () => {
     const c = r.ctx;
     if (!c) return 0;
@@ -267,7 +269,7 @@ export function useOwnPlayer(rec, { semis = 0, onEnd } = {}) {
     s.connect(r.node);
     const t0 = c.currentTime + 0.045;
     // 前の場所の音を捨ててから、新しい場所を流し始める
-    r.node.port.postMessage({ reset: t0 - 0.006, semis: total() });
+    r.node.port.postMessage({ reset: t0 - 0.006, semis: total(), formant: fmt() });
     const g = r.gain.gain;
     g.setValueAtTime(1, t0);
     s.start(t0, Math.max(0, Math.min(off, dur() - 0.02)));
@@ -322,16 +324,17 @@ export function useOwnPlayer(rec, { semis = 0, onEnd } = {}) {
         const pos = heard();
         r.rate = x;
         if (r.playing) startAt(pos);
-        else r.node?.port.postMessage({ semis: total() });
+        else r.node?.port.postMessage({ semis: total(), formant: fmt() });
       },
     };
   }
 
-  // キーが変わったら、流したままその場で変える
+  // キー・声が変わったら、流したままその場で変える
   useEffect(() => {
     r.semis = semis;
-    r.node?.port.postMessage({ semis: total() });
-  }, [semis]);
+    r.voice = voice;
+    r.node?.port.postMessage({ semis: total(), formant: fmt() });
+  }, [semis, voice]);
 
   // 音を読んで、流す部品(キーを変える部品 → 音量 → スピーカー)を用意する
   const fp = rec?.fp || null;
@@ -352,7 +355,7 @@ export function useOwnPlayer(rec, { semis = 0, onEnd } = {}) {
           outputChannelCount: [2],
           channelCount: 2,
           channelCountMode: 'explicit',
-          processorOptions: { semis: total() },
+          processorOptions: { semis: total(), formant: fmt() },
         });
         const gain = c.createGain();
         node.connect(gain).connect(c.destination);
