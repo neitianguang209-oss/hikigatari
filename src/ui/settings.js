@@ -8,12 +8,77 @@ import { usePrefs } from '../lib/prefs.js';
 import { api, deviceKey } from '../lib/api.js';
 import { lib, syncNow, useSyncState, exportAll, useLibrary, pendingCount } from '../lib/store.js';
 import { go, back } from '../lib/router.js';
-import { formatAgo, downloadFile } from '../lib/util.js';
+import { formatAgo, downloadFile, cx } from '../lib/util.js';
+import { listStored, removeStored, mbText } from '../lib/mediastore.js';
+import { ownCloud } from './ownaudio.js';
 import { APP_VERSION } from '../config.js';
 const html = htm.bind(React.createElement);
 
 function Section({ title, children }) {
   return html`<section className="set-section"><h2>${title}</h2><div className="set-card">${children}</div></section>`;
+}
+
+// 自分の音源・自分の歌の録音: どれくらい置いているか・消す・使わなくなったら自動で消す
+function StoredMedia({ keepDays, setKeepDays }) {
+  const [items, setItems] = useState(null);
+  const [cloud, setCloud] = useState(null); // { files, bytes }
+  const [busy, setBusy] = useState(null);
+  const load = async () => {
+    setItems(await listStored());
+    if (deviceKey.get()) ownCloud.usage().then(setCloud).catch(() => setCloud(null));
+  };
+  useEffect(() => {
+    load();
+  }, []);
+  const del = async (it) => {
+    const where = it.kind === 'own' && !it.orphan ? (it.local && it.cloud ? 'この端末とクラウド' : it.cloud ? 'クラウド' : 'この端末') : 'この端末';
+    if (!confirm(`「${it.title}」の${it.kind === 'own' ? '音源' : '録音'}を${where}から消しますか？（元のファイルはそのままです）`)) return;
+    setBusy(it.key);
+    await removeStored(it);
+    setBusy(null);
+    toast('消しました');
+    load();
+  };
+  const delAll = async () => {
+    if (!items?.length || !confirm(`保存している音源・録音を全部（${items.length}つ）消しますか？（元のファイルはそのままです）`)) return;
+    setBusy('all');
+    for (const it of items) await removeStored(it).catch(() => {});
+    setBusy(null);
+    toast('全部消しました');
+    load();
+  };
+  const localBytes = (items || []).filter((x) => x.local).reduce((s, x) => s + x.size, 0);
+  return html`<${React.Fragment}>
+    <${Row}
+      label="使わなくなったら自動で消す"
+      hint="音源や録音は、その時だけ使うことが多いので、しばらく使わなかったものはこの端末とクラウドから消します（元のファイルは消えません。また使うときは選び直してください）"
+    >
+      <${Segmented} size="sm" label="自動で消す" value=${keepDays} onChange=${setKeepDays} options=${[{ value: 0, label: 'しない' }, { value: 7, label: '7日' }, { value: 30, label: '30日' }]} />
+    </${Row}>
+    <div className="set-row">
+      <div className="set-row-text">
+        <span>いま置いているもの</span>
+        <small>${items == null ? '数えています…' : `この端末 ${mbText(localBytes)}（${items.filter((x) => x.local).length}つ）${cloud ? ` ・ クラウド ${mbText(cloud.bytes)}（${cloud.files}つ・1GBまで）` : ''}`}</small>
+      </div>
+      <div className="set-row-ctl">${items?.length ? html`<button className="btn btn-sm btn-ghost" disabled=${!!busy} onClick=${delAll}>全部消す</button>` : null}</div>
+    </div>
+    ${items == null
+      ? null
+      : !items.length
+        ? html`<p className="set-pad muted small">いまは何も置いていません。曲の画面の「原曲」→「曲」から自分の音源を、「…」から自分の歌の録音を入れられます。</p>`
+        : html`<ul className="stored-list">
+            ${items.map(
+              (it) => html`<li key=${it.key} className="stored-row">
+                <span className=${cx('stored-icon', it.kind)}><${Icon} name=${it.kind === 'own' ? 'music' : it.isVideo ? 'video' : 'mic'} size=${18} /></span>
+                <span className="stored-text">
+                  <b>${it.title}</b>
+                  <small>${[it.kind === 'own' ? '原曲の音源' : '自分の歌の録音', mbText(it.size), it.orphan ? '使われていない残り' : it.local && it.cloud ? 'この端末とクラウド' : it.cloud ? 'クラウドだけ' : 'この端末だけ', it.usedAt ? `最後に使用 ${formatAgo(it.usedAt)}` : ''].filter(Boolean).join(' ・ ')}</small>
+                </span>
+                <button className="btn btn-sm" disabled=${!!busy} onClick=${() => del(it)}>${busy === it.key ? '…' : '消す'}</button>
+              </li>`,
+            )}
+          </ul>`}
+  </${React.Fragment}>`;
 }
 
 function Row({ label, hint, children }) {
@@ -109,6 +174,10 @@ export function Settings() {
             <button className="set-link" onClick=${() => setPairOpen(true)}><${Icon} name="lock" /><span>つなぐための6桁の数字（確認・変更）</span></button>
             <button className="set-link" onClick=${() => setKeyOpen(true)}><${Icon} name="device" /><span>バックアップ用キー</span></button>`
         : html`<button className="set-link" onClick=${() => go('/pair')}><${Icon} name="device" /><span>この端末をつなぐ</span></button>`}
+    </${Section}>
+
+    <${Section} title="保存している音（自分の音源・録音）">
+      <${StoredMedia} keepDays=${p.mediaKeepDays ?? 30} setKeepDays=${(v) => set({ mediaKeepDays: v })} />
     </${Section}>
 
     <${Section} title="データ">

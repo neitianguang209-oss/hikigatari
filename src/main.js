@@ -13,8 +13,10 @@ import { Editor } from './ui/editor.js';
 import { Settings } from './ui/settings.js';
 import { AppleGuide } from './ui/apple.js';
 import { EarCopy } from './ui/ear.js';
+import { VoiceFx } from './ui/voicefx.js';
 import { Welcome } from './ui/welcome.js';
-import { ToastHost, Spinner } from './ui/common.js';
+import { ToastHost, Spinner, toast } from './ui/common.js';
+import { autoClean } from './lib/mediastore.js';
 const html = htm.bind(React.createElement);
 
 // ショートカットから ?np=曲名%0Aアーティスト / ?am=AppleMusicのURL / ?q=検索語 で開かれたら、#/open に付け替える
@@ -46,7 +48,11 @@ function App() {
     applyTheme();
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     mq.addEventListener?.('change', applyTheme);
-    initStore().then(() => setReady(true));
+    initStore().then(() => {
+      setReady(true);
+      // 使わなくなった自分の音源・録音を片づける(同期が済んでから。半日に1回)
+      setTimeout(() => autoClean().then((n) => n && toast(`しばらく使っていない音源・録音を ${n}つ片づけました（設定 → 保存している音）`, { ms: 4500 })).catch(() => {}), 8000);
+    });
     const off = onUnpaired(() => setLost(true));
     if (paired) startAutoSync();
     return off;
@@ -77,6 +83,7 @@ function App() {
   else if (path === '/apple') page = html`<${AppleGuide} />`;
   else if (path === '/ear') page = html`<${EarCopy} key=${JSON.stringify(params)} params=${params} />`;
   else if (path === '/open') page = html`<${OpenFrom} key=${JSON.stringify(params)} params=${params} />`;
+  else if (path === '/voice') page = html`<${VoiceFx} />`;
   else if (path === '/pair') page = html`<${Welcome} onDone=${onPaired} initialMode="code" />`;
   else page = html`<${Home} />`;
 

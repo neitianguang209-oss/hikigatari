@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, deviceKey } from '../lib/api.js';
 import { lib, media } from '../lib/store.js';
 import { AUDIO_FN_URL } from '../config.js';
+import { markUsed } from '../lib/mediastore.js';
 import { audioCtx, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { decodeAudio } from '../music/earcopy.js';
 import { aacFromMp4 } from '../music/voice.js';
@@ -159,6 +160,13 @@ export function useOwnAudio(song, { need = false } = {}) {
   useEffect(() => {
     if (need && s.status === 'remote') download();
   }, [need, s.status]);
+  // 使った印(使わなくなった音源だけを自動で片づけるため)。ほかの端末にも分かるよう、曲の設定にも半日に1回だけ
+  useEffect(() => {
+    if (!need || s.status !== 'local') return;
+    markUsed(mid(song.id));
+    const cur = lib.get(song.id)?.settings?.own;
+    if (cur && (!cur.usedAt || Date.now() - cur.usedAt > 432e5)) lib.patchSettings(song.id, { own: { ...cur, usedAt: Date.now() } });
+  }, [need, s.status, song.id]);
 
   // クラウドに置く(ほかの端末でも使えるように)
   const upload = async (rec, meta) => {

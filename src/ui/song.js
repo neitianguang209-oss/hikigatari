@@ -9,6 +9,7 @@ import { useSongMusic, MusicDock, MusicPanel, loadTiming } from './music.js';
 import { KeyHear } from './keyhear.js';
 import { useOwnAudio, decodeOwn, mb, CLOUD_MAX } from './ownaudio.js';
 import { findClipIn } from '../music/hook.js';
+import { markUsed } from '../lib/mediastore.js';
 import { segStart, tapBar } from '../music/timing.js';
 import { listenVoice, refLines, alignRecording } from '../music/voice.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
@@ -387,6 +388,10 @@ function SongReady({ song, reload }) {
       if (url) URL.revokeObjectURL(url);
     };
   }, [song.id]);
+  // 録音を使った印(使わなくなった録音だけを自動で片づけるため)
+  useEffect(() => {
+    if (recOn && rec?.saved) markUsed(song.id);
+  }, [recOn, rec?.fp]);
   // 録音から歌声を聴き取る(録音ごとに1回。結果は手元に置く)
   const recFp = useRef(null);
   recFp.current = rec?.fp || null;
@@ -550,7 +555,8 @@ function SongReady({ song, reload }) {
     try {
       const m = await own.attach(file);
       const where = m.cloud ? 'ほかの端末でも使えるよう、クラウドにも置いています' : m.size > CLOUD_MAX ? `${mb(m.size)}あるので、この端末だけで使います` : 'この端末で使えます';
-      toast(`音源を入れました（${mmssRec(m.dur)}）。歌詞を押すと、そこから流れます。${where}`, { ms: 5500 });
+      const keep = getPrefs().mediaKeepDays ?? 30;
+      toast(`音源を入れました（${mmssRec(m.dur)}）。歌詞を押すと、そこから流れます。${where}。使い終わったら「外す」で消せます${keep ? `（${keep}日使わないと自動で消えます）` : ''}`, { ms: 6500 });
       const songSec = song.durationMs ? song.durationMs / 1000 : 0;
       if (songSec && Math.abs(songSec - m.dur) > 20) toast(`原曲（${mmssRec(songSec)}）と長さがだいぶ違います。別の版（ライブ・短い版など）かもしれません`, { kind: 'error', ms: 6000 });
     } catch (e) {

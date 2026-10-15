@@ -266,6 +266,7 @@ export const local = {
 // 大きいので同期はせず、この端末の中だけに置く。曲ごとに1つ
 export const media = {
   get: (id) => run('media', 'readonly', (s) => s.get(id)).catch(() => null),
+  all: () => run('media', 'readonly', (s) => s.getAll()).catch(() => []),
   put: (id, rec) => run('media', 'readwrite', (s) => s.put({ id, ...rec })),
   del: (id) => run('media', 'readwrite', (s) => s.delete(id)).catch(() => {}),
 };

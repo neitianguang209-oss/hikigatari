@@ -247,6 +247,7 @@ export function Home() {
       <button className="btn" onClick=${() => go('/ear')}><${Icon} name="mic" size=${18} /> 耳コピで作る</button>
       <button className="btn" onClick=${() => go('/add')}><${Icon} name="plus" size=${18} /> 自分で入力する</button>
     </div>
+    <button className="home-tool" onClick=${() => go('/voice')}><${Icon} name="wand" size=${16} /> 自分の歌声のキーを変えてみる（動画・録音）</button>
 
     <footer className="home-foot">
       <${SyncBadge} sync=${sync} />

@@ -11,6 +11,7 @@ import { shiftChannels, VOICE_FORMANT } from '../music/keyshift.js';
 import { decodeAudio } from '../music/earcopy.js';
 import { audioCtx, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { cx, signed } from '../lib/util.js';
+import { mb } from './ownaudio.js';
 const html = htm.bind(React.createElement);
 
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
@@ -206,6 +207,11 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
     pv.pause();
     onPlayFull(from);
   };
+  const removeOwn = () => {
+    if (!confirm('この曲の音源を外しますか？（この端末とクラウドから消えます。元のファイルはそのままです）')) return;
+    onBeforePreview?.();
+    own.remove();
+  };
   const keyTxt = semis ? `${signed(semis)}（${keyLabel}）` : '原曲キー';
   return html`<div className="kh">
     <div className="panel-field">
@@ -222,7 +228,8 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
               <button className="btn kh-full" onClick=${() => full('chorus')} disabled=${marks.chorus == null}><${PlayIcon} playing=${false} size=${18} />サビから</button>
               <button className="btn btn-ghost kh-full" onClick=${() => full(null)}>続きから</button>
             </div>
-            <p className="panel-note">歌い始め・サビは、少し手前（前奏の終わり）から流れます。${marks.chorus == null ? 'この譜面ではサビの場所が分からなかったので、サビは歌詞を押して流してください。' : ''}流しながらキーや声を変えても、その場で切りかわります。</p>`
+            <p className="panel-note">歌い始め・サビは、少し手前（前奏の終わり）から流れます。${marks.chorus == null ? 'この譜面ではサビの場所が分からなかったので、サビは歌詞を押して流してください。' : ''}流しながらキーや声を変えても、その場で切りかわります。</p>
+            <button className="kh-apple kh-remove" onClick=${removeOwn}><${Icon} name="trash" size=${15} />使い終わったら: この音源を外す（${own.own.size ? mb(own.own.size) : ''}・元のファイルはそのまま）</button>`
         : has
           ? html`<div className="kh-full-row">
                 <button className="btn btn-primary kh-full" onClick=${onUseOwn}><${Icon} name="music" size=${18} />自分の音源で流す</button>

@@ -18,6 +18,7 @@ export const DEFAULT_PREFS = {
   countIn: true,
   click: false, // メトロノーム(クリック音)。標準は鳴らさない。曲ごとに下のバーで入れられる
   voice: 'orig', // キーを変えて聴くときの声: orig(歌手の声のまま) | male(男性っぽく) | female(女性っぽく)
+  mediaKeepDays: 30, // 自分の音源・録音を、使わなくなってから何日で自動で消すか(0 = 消さない)
   clickVolume: 1, // クリック音の大きさ(0.6 / 1 / 1.5)
   showBars: true,
   showCurrent: false, // 流しているあいだ、今の行に色を付ける(標準はオフ。BPM の時計と実際の歌がずれて見えるため)

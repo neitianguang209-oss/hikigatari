@@ -70,7 +70,8 @@ function fftRun({ n, rev, cs, sn }, re, im) {
 }
 
 // 声の響き(フォルマント)の位置。歌手の声のまま = 1、男性っぽく・女性っぽく = 響きを下げる・上げる
-export const VOICE_FORMANT = { orig: 1, male: 0.85, female: 1.18 };
+// (女性っぽくは、はっきり分かるように強め: 実際の響きの重心で約1.15〜1.25倍。2026-10-15 ユーザーの希望)
+export const VOICE_FORMANT = { orig: 1, male: 0.85, female: 1.36 };
 
 export class KeyShifter {
   constructor(sampleRate, { block = 128 } = {}) {
@@ -356,9 +357,9 @@ export class KeyShifter {
     };
     const ratio = r / fmt;
     for (let k = 0; k <= half; k++) {
-      // 声の響きが大事なのは 5kHz くらいまで。それより上は少しずつ直すのをやめる(高い音のざらつきを持ち上げないように)
+      // 声の響きが大事なのは 6kHz くらいまで。それより上は少しずつ直すのをやめる(高い音のざらつきを持ち上げないように)
       const fOut = k * r * binHz;
-      const w = fOut < 5000 ? 1 : fOut > 8000 ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * (fOut - 5000)) / 3000);
+      const w = fOut < 6000 ? 1 : fOut > 9000 ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * (fOut - 6000)) / 3000);
       if (w <= 0) {
         fg[k] = 1;
         continue;
