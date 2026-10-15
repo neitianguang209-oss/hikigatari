@@ -6,6 +6,7 @@ import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast }
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
 import { useAutoScroll, glideTo, glideHeading, timelineBeats, timelineOf, timeAtBeat } from './autoscroll.js';
 import { useSongMusic, MusicDock, MusicPanel, loadTiming } from './music.js';
+import { KeyHear, useKeyBridge } from './keyhear.js';
 import { segStart, tapBar } from '../music/timing.js';
 import { listenVoice, refLines, alignRecording } from '../music/voice.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
@@ -498,6 +499,14 @@ function SongReady({ song, reload }) {
   };
   // 上のバーの「原曲」: 曲と合わせるのを始める/やめる(曲ごとに覚える)。動画や合わせ方の設定は、下のバーの「曲」から
   const onMusic = () => music.toggle(!music.on);
+  // このキーで原曲を聴く(パソコン): 原曲の動画の音を取り込んでキーを変える小さい窓と、キーをやりとりする
+  const keyBridge = useKeyBridge({
+    songId: song.id,
+    title: song.title,
+    semis: transpose,
+    label: transpose ? `${keyName(origKey)} → ${keyName(soundKey)}` : `原曲 ${keyName(origKey)}`,
+    setSemis: (v) => setSt({ transpose: v }),
+  });
 
   // 録音を選んだら、この端末に保存して(大きすぎるときは今回だけ)、録音に合わせるモードにする
   const attachRec = async (file) => {
@@ -900,7 +909,8 @@ function SongReady({ song, reload }) {
           </button>`
         : null}
       <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
-      <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
+      <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')} aria-label=${keyBridge.on ? 'キー（原曲をこのキーで流しています）' : undefined}>
+        ${keyBridge.on ? html`<${Icon} name="headphones" size=${14} />` : null}
         <span className="lbl-long">キー ${transpose === 0 ? '原曲' : signed(transpose)}</span>
         <span className="lbl-short">${transpose === 0 ? 'キー' : `キー ${signed(transpose)}`}</span>
       </button>
@@ -1030,7 +1040,18 @@ function SongReady({ song, reload }) {
     />
 
     <${CapoPanel} open=${panel === 'capo'} onClose=${() => setPanel(null)} rank=${capoRank} capo=${capo} auto=${typeof st.capo !== 'number'} setSt=${setSt} stats=${stats} sounding=${sounding} easy=${easy} eased=${eased} hasMod=${hasMod} follow=${follow} />
-    <${KeyPanel} open=${panel === 'key'} onClose=${() => setPanel(null)} transpose=${transpose} origKey=${origKey} setSt=${setSt} instrument=${instrument} />
+    <${KeyPanel}
+      open=${panel === 'key'}
+      onClose=${() => setPanel(null)}
+      transpose=${transpose}
+      origKey=${origKey}
+      setSt=${setSt}
+      instrument=${instrument}
+      song=${song}
+      bridge=${keyBridge}
+      musicOn=${music.on}
+      onMusicOn=${() => music.toggle(true)}
+    />
     <${TempoPanel}
       open=${panel === 'tempo'}
       onClose=${() => setPanel(null)}
@@ -1612,7 +1633,7 @@ function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, ea
   </${Sheet}>`;
 }
 
-function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument }) {
+function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, bridge, musicOn, onMusicOn }) {
   return html`<${Sheet} open=${open} onClose=${onClose} title="キー（曲の高さ）">
     <p className="panel-lead">自分の声に合わせて曲全体の高さを変えます。${instrument === 'guitar' ? 'ギターのカポ位置も自動で選び直します。' : ''}</p>
     <div className="key-big">
@@ -1623,6 +1644,17 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument }) {
     <div className="row-gap center">
       <button className="btn" disabled=${transpose === 0} onClick=${() => setSt({ transpose: 0 })}>原曲キーに戻す</button>
     </div>
+    <${KeyHear}
+      songId=${song.id}
+      active=${open}
+      semis=${transpose}
+      keyLabel=${keyName(origKey, transpose)}
+      origLabel=${keyName(origKey)}
+      getTrack=${() => appleTrackOf(song)}
+      bridge=${bridge}
+      musicOn=${musicOn}
+      onMusicOn=${onMusicOn}
+    />
   </${Sheet}>`;
 }
 

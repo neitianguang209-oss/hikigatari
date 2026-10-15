@@ -4203,3 +4203,141 @@ body:has(.rec-dock) .toast-host {
     padding-top: 152px;
   }
 }
+
+/* ---------------------------------------------------------------- このキーで原曲を聴く(キーのパネルの下) */
+.kh {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.kh-sub {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.kh-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kh-play {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.kh-play:active {
+  transform: scale(0.96);
+}
+.kh-play:disabled {
+  opacity: 0.5;
+}
+.kh-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.kh-busy {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+.kh-seek {
+  margin-top: 6px;
+}
+.kh-err {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+  color: var(--danger);
+}
+.kh-full {
+  gap: 8px;
+}
+.kh-live {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.kh-live span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.kh-live i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: kh-blink 1.4s ease-in-out infinite;
+}
+@keyframes kh-blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kh-live i {
+    animation: none;
+  }
+}
+/* 小さい窓(key.html) */
+.kp-body {
+  background: var(--bg);
+}
+.kp {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 18px 16px 24px;
+}
+.kp-title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.kp-song {
+  margin: 4px 0 0;
+  font-size: 0.86rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kp-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  margin: 16px 0 14px;
+}
+.kp-key-mid {
+  min-width: 7em;
+  text-align: center;
+}
+.kp-start {
+  width: 100%;
+  min-height: 50px;
+}
+.kp-steps {
+  margin: 14px 0 0;
+  padding-left: 1.3em;
+  font-size: 0.86rem;
+  line-height: 1.7;
+}
+.kp-live {
+  justify-content: flex-start;
+}
