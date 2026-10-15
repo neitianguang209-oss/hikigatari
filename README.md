@@ -44,9 +44,14 @@
   - 歌詞やコードを押すと、そこから録音が流れる(曲と合わせる と同じ)。動画は小窓(大きく・隠す)、ゆっくり再生(音程そのまま)、区間リピートも録音で使える
   - 確かめ方(`.devdata/voicerun.js`・`voicetest.js`・`fakevoice.ps1`): KRC の時刻から作った「にせの歌」(速さ ±12%・行ごとのゆれ・間奏を縮める・息つぎで切れる)10曲で、行の頭が0.5秒以内に合う割合は平均94%。1番だけ・サビからの録音も自動で合い、合わなかった曲も1回タップで合う。行ごとの時刻しか無い歌詞(LRC)は平均83%。合成音声で作った録音(本物の音)でも、59行の歌い出しを全部聴き取って全行0.3秒以内。本物の歌声では未確認
   - 原曲の歌詞の時刻が見つからない曲・伴奏つきの録音は、自動では歌い出しだけ合わせる(テンポどおり)。あとは「合わせる」で押した場所のずれぶんを動かす(間奏をはさむときは、ずれを間奏のところに割り振る)
-- **このキーで原曲を聴く**(`src/ui/keyhear.js`・`src/music/keyshift.js`): キーを変えたとき、原曲がその高さでどう聞こえるかを確かめる。上のバーの「キー」のパネルから
-  - **試聴30秒**(どの端末でも): Apple Music の試聴を、端末の中でそのキーに変えてから流す(30秒で約1秒。くり返し流れる)。流しながら − ＋ で変えると、その位置のまま切りかわる。「原曲」と押し比べられる(原曲側は、キーを変えた音と同じ大きさにそろえる)
-  - **1曲まるごと**(パソコンの Chrome・Edge だけ): 曲と合わせる の YouTube の音を、小さい窓(`key.html`・`src/keypop.js`)がタブの音ごと取り込み(`getDisplayMedia` の `suppressLocalAudioPlayback` で元の音は消す)、AudioWorklet(`keyshift-worklet.js`)でキーを変えて流す。キーは曲の画面と窓のどちらで変えても同じ(BroadcastChannel `hikigatari-key`)。音を抜き出して保存することはしない
+- **自分の音源**(`src/ui/ownaudio.js`・Edge Function `hikigatari-audio`): 持っている原曲のファイル(買った曲・CD から取り込んだ曲など。m4a・mp3・wav・aac・flac、動画なら音だけ取り出す)を、その曲の「原曲」として流す。**広告なし・iPhone/iPad でも1曲まるごと・好きなキーと速さ(音程はそのまま)**。歌詞やコードを押すとそこから流れる・歌に合わせる・早く/遅くは YouTube と同じ(時刻は原曲の時刻つき歌詞から。`loadTiming(..., { voice: true })`)
+  - 入れ方: 「曲」のパネル・キーのパネル・状態の案内の「ファイルを選ぶ」。この端末(IndexedDB `media` の `src:曲ID`)に置き、40MB までなら非公開のバケット `hikigatari-audio` にも置く(期限つきの URL で直接送る。曲の設定 `settings.own = { name, size, dur, fp, path, type }` が同期される)。ほかの端末では、最初に流すときに一度だけ取ってきて手元に置く。外すとクラウドからも消える
+  - 流し方(`useOwnPlayer`): AudioBufferSource → AudioWorklet(`keyshift-worklet.js`)→ 音量 → スピーカー。キーはその場で変わる(port に semis)。速さを変えると高さも変わってしまうので、そのぶん(12×log2(1/速さ))をキーで戻す。頭出しは `{ reset: 時刻 }` で中に残った音を捨ててから。耳に聞こえている位置 = 流した位置 −(変換の遅れ `shifterLatency` + 出力の遅れ)
+  - 流す音は、自分の音源があればそちら(`settings.musicSrc = 'yt'` のときだけ YouTube)。YouTube の動画の音を加工・取り出し・保存すること、広告を消すことは、YouTube の決まり(API Services Developer Policies III.I.5・III.I.7・III.E.1)で禁じられているのでやらない(v1.18 のパソコン用「タブの音を取り込んでキーを変える窓」は v1.19 で外した)
+  - Apple Music の曲は保護されていてファイルにできない。iTunes Store で買った曲は、パソコンの Apple Music アプリ/iTunes でダウンロードするとファイルになる
+- **このキーで原曲を聴く**(`src/ui/keyhear.js`・`src/music/keyshift.js`): 上のバーの「キー」のパネルから
+  - **1曲まるごと**: 自分の音源があれば「−5(B)で流す」(パネルを閉じてそのキーで流す)。無ければ「音源ファイルを選ぶ」
+  - **試聴30秒**(どの端末でも): Apple Music の試聴を、端末の中でそのキーに変えてから流す(30秒で約1秒。くり返し流れる)。流しながら − ＋ で変えると、その位置のまま切りかわる。「原曲」と押し比べられる(原曲側は、キーを変えた音と同じ大きさにそろえる)。試聴はお店で聴くためのものなので、すぐ下に Apple Music への入口
   - 変え方: フェーズボコーダで r=2^(半音/12) 倍に伸ばして r 倍の速さで読み直す(窓4096・重ね8、倍音の山ごとに位相をそろえる identity phase locking、左右は同じ回転)。合成音で 5つ下げ 440→330Hz(ずれ2セント以内)、和音は他の音が −100dB 以下、左右の位相差・打った音の時刻もそのまま。位相を動かすと瞬間の山が元の約1.7倍になるので、先読み6ミリ秒のリミッターで音割れを止める(そのぶん約 −2.4dB)
 - 1行は折り返さずに1行で見せる（はみ出す行だけ少し縮める。コードだけの長い行は段の数をそろえて折る）
 - 検索は曲名・アーティスト名をまとめて入れても、ひらがな・カタカナでもOK。同じ曲名の曲は歌ネットの人気順で並ぶ
@@ -80,6 +85,7 @@ PC・iPad のキーボードやフットペダル: スペース＝自動スク�
 | `src/lib/store.js` | 端末内の保存（IndexedDB）と同期。クラウドが空でも端末のデータは消さない |
 | `supabase/functions/hikigatari/index.ts` | Edge Function。サイト検索・譜面取り込み・端末の鍵・同期 |
 | `supabase/functions/hikigatari-yt/index.ts` | Edge Function(小さい別の関数)。曲と合わせる動画を探す。本体と同じ端末の鍵で守る(`verify_jwt: false`) |
+| `supabase/functions/hikigatari-audio/index.ts` | Edge Function(小さい別の関数)。自分の音源を置く非公開のバケット `hikigatari-audio`(1曲 40MB まで・audio/* と mp4/mov だけ・ポリシー無し=直接は読めない)へ、入れる用・取り出す用の期限つき URL を渡す(`put`・`get`・`del`・`usage`)。本体と同じ端末の鍵で守る(`verify_jwt: false`) |
 | `sw.js` | オフライン用。**更新して公開するたびに `CACHE_NAME` の番号を上げる** |
 | `icons/icon.svg` | アイコンの元絵(夜の丘で、月を背にギターを弾き語りする人)。PNG は `powershell -ExecutionPolicy Bypass -File icons/render-icons.ps1` で作る(Edge で描いて縮小) |
 

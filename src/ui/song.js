@@ -6,7 +6,8 @@ import { Sheet, Segmented, Stepper, Switch, Spinner, Artwork, ChordText, toast }
 import { GuitarDiagram, GuitarChordCard, PianoKeyboard, StaffDiagram, PianoChordCard, chosenVoicing } from './diagrams.js';
 import { useAutoScroll, glideTo, glideHeading, timelineBeats, timelineOf, timeAtBeat } from './autoscroll.js';
 import { useSongMusic, MusicDock, MusicPanel, loadTiming } from './music.js';
-import { KeyHear, useKeyBridge } from './keyhear.js';
+import { KeyHear } from './keyhear.js';
+import { useOwnAudio, mb, CLOUD_MAX } from './ownaudio.js';
 import { segStart, tapBar } from '../music/timing.js';
 import { listenVoice, refLines, alignRecording } from '../music/voice.js';
 import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
@@ -485,7 +486,9 @@ function SongReady({ song, reload }) {
   // ---- 曲と合わせる(原曲の動画をアプリの中で流す。歌詞やコードを押すと、そこから曲が流れる)
   const scrollApi = useRef(null);
   const totalBeats = useMemo(() => timelineBeats(parsed.lines, barsPerLine, beatsPerBar, bpm), [parsed, barsPerLine, beatsPerBar, bpm]);
-  const music = useSongMusic({ song, st, setSt, lines: parsed.lines, bpm, totalBeats, scrollApi });
+  // 自分の音源(持っている原曲のファイル)。曲と合わせるで流すときに、この端末に無ければクラウドから取ってくる
+  const own = useOwnAudio(song, { need: !!st.ytOn && !!st.own && st.musicSrc !== 'yt' });
+  const music = useSongMusic({ song, st, setSt, lines: parsed.lines, bpm, totalBeats, scrollApi, own, semis: transpose });
   const clock = music.clock || recClock;
 
   // スタート前のカウント(4・3・2・1)は、メトロノームを鳴らしているときだけ。鳴らしていないときは、押したらすぐ流れる
@@ -499,14 +502,50 @@ function SongReady({ song, reload }) {
   };
   // 上のバーの「原曲」: 曲と合わせるのを始める/やめる(曲ごとに覚える)。動画や合わせ方の設定は、下のバーの「曲」から
   const onMusic = () => music.toggle(!music.on);
-  // このキーで原曲を聴く(パソコン): 原曲の動画の音を取り込んでキーを変える小さい窓と、キーをやりとりする
-  const keyBridge = useKeyBridge({
-    songId: song.id,
-    title: song.title,
-    semis: transpose,
-    label: transpose ? `${keyName(origKey)} → ${keyName(soundKey)}` : `原曲 ${keyName(origKey)}`,
-    setSemis: (v) => setSt({ transpose: v }),
-  });
+
+  // 自分の音源のファイルを選んだ: この曲の原曲にする(この端末に置き、40MB までならクラウドにも置いて、ほかの端末でも流せるように)
+  const ownFileRef = useRef(null);
+  const pickOwn = () => ownFileRef.current?.click();
+  const attachOwn = async (file) => {
+    if (!file) return;
+    scroll.stop();
+    toast('音源を読み込んでいます…', { ms: 6000 });
+    try {
+      const m = await own.attach(file);
+      const where = m.cloud ? 'ほかの端末でも使えるよう、クラウドにも置いています' : m.size > CLOUD_MAX ? `${mb(m.size)}あるので、この端末だけで使います` : 'この端末で使えます';
+      toast(`音源を入れました（${mmssRec(m.dur)}）。歌詞を押すと、そこから流れます。${where}`, { ms: 5500 });
+      const songSec = song.durationMs ? song.durationMs / 1000 : 0;
+      if (songSec && Math.abs(songSec - m.dur) > 20) toast(`原曲（${mmssRec(songSec)}）と長さがだいぶ違います。別の版（ライブ・短い版など）かもしれません`, { kind: 'error', ms: 6000 });
+    } catch (e) {
+      toast(
+        e.code === 'big'
+          ? 'ファイルが大きすぎます（音だけのファイル・400MBまで）'
+          : e.code === 'short'
+            ? '短すぎる音です。1曲まるごとのファイルを選んでください'
+            : 'このファイルは読めませんでした（m4a・mp3・wav・aac などの音のファイルを選んでください）',
+        { kind: 'error', ms: 5000 },
+      );
+    }
+  };
+  // キーのパネルから: 自分の音源を、このキーで流す(パネルを閉じて、いまの場所から)
+  const playOwnFull = () => {
+    audioCtx(); // iPhone は押した瞬間に音の出口を開ける
+    setPanel(null);
+    if (music.on && music.mine) {
+      if (!scroll.playing) scroll.start();
+      return;
+    }
+    if (!music.on) music.toggle(true);
+    else music.panel.setSource('own');
+    pendingStart.current = true;
+  };
+  const pendingStart = useRef(false);
+  useEffect(() => {
+    if (pendingStart.current && music.mine && music.clock) {
+      pendingStart.current = false;
+      scroll.start();
+    }
+  }, [music.mine, !!music.clock]);
 
   // 録音を選んだら、この端末に保存して(大きすぎるときは今回だけ)、録音に合わせるモードにする
   const attachRec = async (file) => {
@@ -909,8 +948,7 @@ function SongReady({ song, reload }) {
           </button>`
         : null}
       <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
-      <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')} aria-label=${keyBridge.on ? 'キー（原曲をこのキーで流しています）' : undefined}>
-        ${keyBridge.on ? html`<${Icon} name="headphones" size=${14} />` : null}
+      <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
         <span className="lbl-long">キー ${transpose === 0 ? '原曲' : signed(transpose)}</span>
         <span className="lbl-short">${transpose === 0 ? 'キー' : `キー ${signed(transpose)}`}</span>
       </button>
@@ -1007,7 +1045,8 @@ function SongReady({ song, reload }) {
         />`
       : null}
     <input ref=${recFileRef} type="file" accept="video/*,audio/*" hidden onChange=${(e) => { attachRec(e.target.files?.[0]); e.target.value = ''; }} />
-    ${music.on ? html`<${MusicDock} ...${music.dock} onPanel=${() => setPanel('music')} />` : null}
+    <input ref=${ownFileRef} type="file" accept="audio/*,.m4a,.mp3,.aac,.wav,.flac,.aif,.aiff,video/mp4,video/quicktime" hidden onChange=${(e) => { attachOwn(e.target.files?.[0]); e.target.value = ''; }} />
+    ${music.on ? html`<${MusicDock} ...${music.dock} onPanel=${() => setPanel('music')} onPickOwn=${pickOwn} onRetryOwn=${own.download} onKey=${() => setPanel('key')} />` : null}
 
     <${Transport}
       rec=${recOn}
@@ -1048,9 +1087,13 @@ function SongReady({ song, reload }) {
       setSt=${setSt}
       instrument=${instrument}
       song=${song}
-      bridge=${keyBridge}
-      musicOn=${music.on}
-      onMusicOn=${() => music.toggle(true)}
+      own=${own}
+      mine=${music.on && music.mine}
+      onPickOwn=${() => { setPanel(null); pickOwn(); }}
+      onUseOwn=${playOwnFull}
+      onPlayFull=${playOwnFull}
+      onBeforePreview=${() => scroll.playing && scroll.stop()}
+      onApple=${onApple}
     />
     <${TempoPanel}
       open=${panel === 'tempo'}
@@ -1093,7 +1136,7 @@ function SongReady({ song, reload }) {
       musicOn=${music.on}
       onMusic=${() => { if (music.on) setPanel('music'); else { setPanel(null); music.toggle(true); } }}
     />
-    <${MusicPanel} open=${panel === 'music'} onClose=${() => setPanel(null)} ...${music.panel} onOff=${() => music.toggle(false)} onApple=${onApple} />
+    <${MusicPanel} open=${panel === 'music'} onClose=${() => setPanel(null)} ...${music.panel} onPickOwn=${pickOwn} onOff=${() => music.toggle(false)} onApple=${onApple} />
     <${RecPanel}
       open=${panel === 'rec'}
       onClose=${() => setPanel(null)}
@@ -1633,7 +1676,7 @@ function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, ea
   </${Sheet}>`;
 }
 
-function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, bridge, musicOn, onMusicOn }) {
+function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
   return html`<${Sheet} open=${open} onClose=${onClose} title="キー（曲の高さ）">
     <p className="panel-lead">自分の声に合わせて曲全体の高さを変えます。${instrument === 'guitar' ? 'ギターのカポ位置も自動で選び直します。' : ''}</p>
     <div className="key-big">
@@ -1651,9 +1694,13 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, 
       keyLabel=${keyName(origKey, transpose)}
       origLabel=${keyName(origKey)}
       getTrack=${() => appleTrackOf(song)}
-      bridge=${bridge}
-      musicOn=${musicOn}
-      onMusicOn=${onMusicOn}
+      onApple=${() => { onClose(); onApple(); }}
+      own=${own}
+      mine=${mine}
+      onPickOwn=${onPickOwn}
+      onUseOwn=${onUseOwn}
+      onPlayFull=${onPlayFull}
+      onBeforePreview=${onBeforePreview}
     />
   </${Sheet}>`;
 }

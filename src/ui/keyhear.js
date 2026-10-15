@@ -1,97 +1,19 @@
 // このキーで原曲を聴く: キーを変えたら、原曲がその高さでどう聞こえるかを確かめる(「この高さなら歌えるかも」「どこの音で歌えばいい？」)
 // ・試聴30秒(Apple Music の曲の一部。サビのことが多い): どの端末でも。この端末の中でキーを変えてから流す。原曲キーとその場で聴き比べられる
-// ・1曲まるごと(パソコンの Chrome・Edge だけ): アプリの中で流している YouTube の原曲を、小さい窓(key.html)がタブの音ごと取り込み、
-//   キーを変えて流す(取り込んでいる間、このタブの元の音は消える)。キーはどちらの画面で変えても同じ(BroadcastChannel でやりとり)
-// YouTube の音を抜き出したり保存したりはしない(鳴っている音を、その場で変えて流すだけ)
+//   (Apple の試聴は「お店で聴くため」のものなので、すぐ横に Apple Music への入口を置く)
+// ・1曲まるごと: 自分の音源ファイル(ownaudio.js)を入れると、歌詞を押したところからそのキーで流れる。iPhone・iPad でも。広告なし
+//   YouTube の動画の音は、キーを変えたり(加工)取り出したりしない(YouTube の決まりで禁じられている)
 import React, { useEffect, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon, PlayIcon } from './icons.js';
-import { Segmented, toast } from './common.js';
+import { Segmented } from './common.js';
 import { shiftChannels } from '../music/keyshift.js';
 import { decodeAudio } from '../music/earcopy.js';
 import { audioCtx, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { cx, signed } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
-const UA = navigator.userAgent;
-const MOBILE = /iPhone|iPad|iPod|Android/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
-// タブの音を取り込んで、このタブの元の音だけ消せるブラウザ(パソコンの Chrome・Edge)
-export const CAN_FULL = (() => {
-  try {
-    return !MOBILE && !!navigator.mediaDevices?.getDisplayMedia && !!navigator.mediaDevices.getSupportedConstraints?.().suppressLocalAudioPlayback && typeof BroadcastChannel !== 'undefined';
-  } catch {
-    return false;
-  }
-})();
-
-// 小さい窓が「取り込んだのは ひきがたり のタブ」と分かるように、このタブに名札をつけておく
-try {
-  if (CAN_FULL && window.top === window) navigator.mediaDevices.setCaptureHandleConfig?.({ handle: 'hikigatari', exposeOrigin: true, permittedOrigins: [location.origin] });
-} catch {}
-
 const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-
-// ---------------------------------------------------------------- 小さい窓とのやりとり
-
-const CH = 'hikigatari-key';
-let bc = null;
-let liveOn = false;
-let lastKey = null;
-let onSetKey = null;
-const watchers = new Set();
-function channel() {
-  if (bc || !CAN_FULL) return bc;
-  bc = new BroadcastChannel(CH);
-  bc.onmessage = (e) => {
-    const d = e.data || {};
-    if (d.type === 'state') {
-      liveOn = !!d.on;
-      watchers.forEach((f) => f(liveOn));
-    } else if (d.type === 'hello') {
-      bc.postMessage(lastKey || { type: 'key', songId: null, semis: 0, label: '', title: '' });
-    } else if (d.type === 'setKey') onSetKey?.(d);
-  };
-  // 窓がもう開いていれば(このタブを読み込み直したときなど)、いまの様子を教えてもらう
-  bc.postMessage({ type: 'ping' });
-  return bc;
-}
-
-// 曲の画面から: いまのキーを窓へ知らせる・窓で変えたキーを受け取る。on = 窓が音を取り込んで流している
-export function useKeyBridge({ songId, title, semis, label, setSemis }) {
-  const [on, setOn] = useState(liveOn);
-  const set = useRef(setSemis);
-  set.current = setSemis;
-  useEffect(() => {
-    if (!CAN_FULL) return;
-    channel();
-    watchers.add(setOn);
-    setOn(liveOn);
-    onSetKey = (d) => d.songId === songId && set.current(Math.max(-6, Math.min(6, d.semis | 0)));
-    return () => {
-      watchers.delete(setOn);
-      onSetKey = null;
-      // 曲の画面を出たら、窓は原曲のキーに戻しておく
-      lastKey = null;
-      bc?.postMessage({ type: 'key', songId: null, semis: 0, label: '', title: '' });
-    };
-  }, [songId]);
-  useEffect(() => {
-    if (!CAN_FULL) return;
-    lastKey = { type: 'key', songId, title, semis, label };
-    channel()?.postMessage(lastKey);
-  }, [songId, semis, label]);
-  return {
-    on,
-    open() {
-      const w = window.open('key.html', 'hikigatari-key', 'popup=yes,width=380,height=600');
-      if (!w) toast('小さい窓を開けませんでした（ポップアップが止められています。アドレスバーの右の印から許可してください）', { kind: 'error', ms: 5000 });
-      else w.focus?.();
-    },
-    stop() {
-      channel()?.postMessage({ type: 'stop' });
-    },
-  };
-}
 
 // ---------------------------------------------------------------- 試聴30秒をこのキーで
 
@@ -258,22 +180,45 @@ function usePreview({ active, getTrack, semis, cacheKey }) {
   return { ui, pos: { t: pos.t, d: pos.d || shared.orig?.duration || 0 }, play, pause, seek, setWhich };
 }
 
-// キーのパネルの中: 試聴をこのキーで / 1曲まるごと(パソコン)
-export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, bridge, musicOn, onMusicOn }) {
+// キーのパネルの中: 試聴をこのキーで / 1曲まるごと(自分の音源)
+// own: useOwnAudio の戻り値。mine: いま自分の音源で流している。onPlayFull: パネルを閉じて、自分の音源をこのキーで流す
+export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, onApple, own, mine, onPickOwn, onUseOwn, onPlayFull, onBeforePreview }) {
   const pv = usePreview({ active, getTrack, semis, cacheKey: songId });
   const { ui, pos } = pv;
   const busy = ui.stage === 'load' || ui.stage === 'shift';
   const busyText = ui.stage === 'load' ? '試聴を読み込んでいます…' : `${signed(semis)} に変えています… ${Math.round(ui.prog * 100)}%`;
-  const openFull = () => {
+  const has = !!own?.own;
+  const playPreview = () => {
+    onBeforePreview?.();
+    pv.play();
+  };
+  const full = () => {
     pv.pause();
-    if (!musicOn) onMusicOn();
-    bridge.open();
+    onPlayFull();
   };
   return html`<div className="kh">
     <div className="panel-field">
-      <div className="panel-field-label">このキーで原曲を聴く<small className="kh-sub">試聴30秒（サビのことが多い）</small></div>
+      <div className="panel-field-label">1曲まるごと、このキーで<small className="kh-sub">${has ? '自分の音源・広告なし' : 'iPhone・iPad・パソコン'}</small></div>
+      ${has && mine
+        ? html`<div className="kh-full-row">
+              <button className="btn btn-primary kh-full" onClick=${full}><${PlayIcon} playing=${false} size=${18} />${semis ? `${signed(semis)}（${keyLabel}）で流す` : '原曲キーで流す'}</button>
+            </div>
+            <p className="panel-note">歌詞やコードを押すと、そこからこの高さで流れます。流しながらキーを変えても、その場で切りかわります。</p>`
+        : has
+          ? html`<div className="kh-full-row">
+                <button className="btn btn-primary kh-full" onClick=${onUseOwn}><${Icon} name="music" size=${18} />自分の音源で流す</button>
+              </div>
+              <p className="panel-note">いまは YouTube で流しています。YouTube の動画の音はキーを変えられないので（YouTube の決まり）、自分の音源に切りかえると、このキーで流せます。</p>`
+          : html`<div className="kh-full-row">
+                <button className="btn btn-primary kh-full" onClick=${onPickOwn}><${Icon} name="upload" size=${18} />音源ファイルを選ぶ</button>
+              </div>
+              <p className="panel-note">自分で持っている原曲のファイル（買った曲・CD から取り込んだ曲など）を入れると、1曲まるごとこのキーで流せます。広告も入りません。一度入れれば、ほかの端末でもそのまま使えます。</p>`}
+    </div>
+
+    <div className="panel-field">
+      <div className="panel-field-label">試聴で聴いてみる<small className="kh-sub">30秒（サビのことが多い）</small></div>
       <div className="kh-row">
-        <button className=${cx('kh-play', ui.playing && 'is-on')} onClick=${ui.playing ? pv.pause : pv.play} disabled=${ui.stage === 'load'} aria-label=${ui.playing ? '止める' : 'このキーで試聴を流す'}>
+        <button className=${cx('kh-play', ui.playing && 'is-on')} onClick=${ui.playing ? pv.pause : playPreview} disabled=${ui.stage === 'load'} aria-label=${ui.playing ? '止める' : 'このキーで試聴を流す'}>
           <${PlayIcon} playing=${ui.playing} size=${20} />
         </button>
         ${semis !== 0
@@ -299,22 +244,7 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
         : null}
       ${ui.err ? html`<p className="kh-err" role="alert">${ui.err}</p>` : null}
       <p className="panel-note">流しながら上の − ＋ でキーを変えると、その高さに切りかわります。「原曲」と押し比べると、どれくらい下がる（上がる）かが分かります。</p>
+      <button className="kh-apple" onClick=${onApple}><${Icon} name="apple" size=${15} />試聴は Apple Music から（Apple Music でこの曲を開く）</button>
     </div>
-    ${CAN_FULL
-      ? html`<div className="panel-field">
-          <div className="panel-field-label">1曲まるごと<small className="kh-sub">このパソコンの Chrome・Edge だけ</small></div>
-          ${bridge.on
-            ? html`<div className="kh-live" role="status">
-                <span><i></i>原曲の動画を、このキーで流しています</span>
-                <button className="btn btn-sm" onClick=${bridge.stop}>やめる</button>
-              </div>`
-            : html`<button className="btn kh-full" onClick=${openFull}><${Icon} name="headphones" size=${18} />原曲の動画をこのキーで流す</button>`}
-          <p className="panel-note">
-            ${bridge.on
-              ? '歌詞やコードを押すと、そこからこのキーの高さで流れます。キーを変えると、その場で変わります。やめるときは「やめる」か、小さい窓を閉じてください。'
-              : html`小さい窓が開きます。窓の「取り込んで、このキーで流す」を押して、出てきた一覧の「Chrome タブ」から<b>このタブ（ひきがたり）</b>を選び、「共有」を押してください。そのあとは、歌詞を押して流すと、このキーの高さで聞こえます（取り込んでいる間、このタブの元の音は消えます）。`}
-          </p>
-        </div>`
-      : null}
   </div>`;
 }

@@ -123,6 +123,32 @@ export class KeyShifter {
     return Math.round(this.N / 2 + this.N / (2 * this.r) - this.Ha + this.margin + this.lim.la);
   }
 
+  // 中に残っている音を捨てて、はじめの状態に戻す(曲の別の場所へ飛ぶとき。前の場所の音が少し遅れて聞こえないように)
+  reset() {
+    this.inL.fill(0);
+    this.inR.fill(0);
+    this.fill = 0;
+    this.accL.fill(0);
+    this.accR.fill(0);
+    this.sL.fill(0);
+    this.sR.fill(0);
+    this.sLen = 1;
+    this.pos = 1;
+    this.oL.fill(0, 0, this.margin);
+    this.oR.fill(0, 0, this.margin);
+    this.oRd = 0;
+    this.oW = this.margin;
+    this.pmr.fill(0);
+    this.pmi.fill(0);
+    this.pth.fill(0);
+    this.first = true;
+    const L = this.lim;
+    Object.assign(L, { qHead: 0, qLen: 0, n: 0, h: 1, hi: 0, sum: L.la, di: 0 });
+    L.hs.fill(1);
+    L.dl.fill(0);
+    L.dr.fill(0);
+  }
+
   // inL・inR の音を入れて、同じ数だけ outL・outR に出す(inR が無ければ inL を両方に)
   process(inL, inR, outL, outR) {
     const n = outL.length;
@@ -372,6 +398,17 @@ export class KeyShifter {
     }
     this.pos = pos;
   }
+}
+
+// 入ってから聞こえるまでの遅れ(秒)。KeyShifter の latency と同じ計算(流している位置を、耳に聞こえている位置に直すのに使う)
+export function shifterLatency(sampleRate, semis) {
+  const N = sampleRate >= 32000 ? 4096 : 2048;
+  const Ha = N >> 3;
+  const s = Math.max(-12, Math.min(12, Number(semis) || 0));
+  const r = Math.max(1, Math.round(Ha * Math.pow(2, s / 12))) / Ha;
+  const margin = Math.max(0, Ha - 128) + 32;
+  const la = Math.round(sampleRate * 0.006);
+  return Math.round(N / 2 + N / (2 * r) - Ha + margin + la) / sampleRate;
 }
 
 // 音のかたまり(左・右)をまとめてキーを変える。出てくる音は元と同じ長さ・同じ時刻にそろえる。

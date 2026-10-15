@@ -3,6 +3,8 @@
 // ・動画は曲ごとに1回だけ読み込み、押すたびに読み直さない(再生位置を移すだけ)
 // ・譜面の行 ↔ 曲の時刻は、コード進行メモ倉庫の曲データ(動画の時刻そのもの)か、時刻つき歌詞から作る(music/timing.js)
 // ・動画と時刻がずれる曲は「歌に合わせる」(流しながら、いま歌っている歌詞をタップ)で直す
+// ・流す音は YouTube の動画か、自分の音源ファイル(ownaudio.js。広告なし・好きなキーと速さで流せる)。
+//   自分の音源があれば、そちらを先に使う(settings.musicSrc = 'yt' のときだけ YouTube)
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon } from './icons.js';
@@ -14,7 +16,8 @@ import { getPrefs, setPrefs } from '../lib/prefs.js';
 import { findLyrics, krcToSynced, krcCandidates } from '../lib/lyrics.js';
 import { mcToSheet } from '../music/mcsheet.js';
 import { alignLines, mcDirect, mcSyncedLines, syncedLines, vocalSpans, mcSpans, tapTime, rankVideos, parseYouTubeId } from '../music/timing.js';
-import { cx, baseTitle } from '../lib/util.js';
+import { cx, baseTitle, signed } from '../lib/util.js';
+import { useOwnPlayer, mb, CLOUD_MAX } from './ownaudio.js';
 const html = htm.bind(React.createElement);
 
 const LEAD = 0.12; // 押した文字・コードの出だしが切れないよう、ほんの少しだけ手前から
@@ -282,12 +285,16 @@ export async function loadTiming(song, lines, { voice = false } = {}) {
 // ---------------------------------------------------------------- 曲の画面から使う
 
 // scrollApi: useAutoScroll の戻り値を入れておく ref(このフックの時計を自動スクロールに渡すので、順番の都合で ref 経由)
-export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollApi }) {
+// own: useOwnAudio の戻り値(自分の音源)。semis: いまのキー(自分の音源はそのキーで流す)
+export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollApi, own, semis = 0 }) {
   const on = !!st.ytOn;
-  const video = st.yt?.id ? st.yt : null;
-  // 動画ごとの合わせ込み: pts = 「譜面の時刻 t のところは、動画では off 秒ずれている」の目印(歌に合わせるで作る)。
+  // 自分の音源があれば、それを流す(YouTube にしたいときは settings.musicSrc = 'yt')
+  const mine = !!own?.own && st.musicSrc !== 'yt';
+  const video = !mine && st.yt?.id ? st.yt : null;
+  // 動画(音源)ごとの合わせ込み: pts = 「譜面の時刻 t のところは、動画では off 秒ずれている」の目印(歌に合わせるで作る)。
   // 1か所なら全体を同じだけずらし、何か所かあれば、あいだはなめらかにつなぐ(前奏や間奏の長さが違う動画・テンポの揺れる曲でも合う)
-  const fix = (video && st.ytFix?.[video.id]) || null;
+  const fixKey = mine ? 'own:' + own.own.fp : video?.id || null;
+  const fix = (fixKey && st.ytFix?.[fixKey]) || null;
   const pts = fix?.pts || [];
   const offAt = (t) => {
     if (!pts.length) return 0;
@@ -310,7 +317,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   const bad = useRef(new Set()); // この端末で流せなかった動画
   const live = useRef({});
 
-  const yt = useYouTube(on ? video?.id : null, {
+  const yt = useYouTube(on && !mine ? video?.id : null, {
     onPlay: () => {
       const s = scrollApi.current;
       if (s && !s.isPlaying()) s.start();
@@ -337,19 +344,24 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     },
   });
 
-  // 譜面の行 ↔ 曲の時刻。作ったものは手元に置いておき、譜面が変わったら作り直す
+  // 自分の音源(流し終わったら譜面も止める)
+  const mp = useOwnPlayer(on && mine ? own.rec : null, { semis, onEnd: () => scrollApi.current?.stop() });
+  const player = mine ? mp : yt;
+
+  // 譜面の行 ↔ 曲の時刻。作ったものは手元に置いておき、譜面が変わったら作り直す。
+  // 自分の音源は原曲(アルバム)の音なので、時刻つき歌詞(原曲の時刻)を先に探す
   const sig = useMemo(() => timingSig(song), [song.source, song.sourceId, song.sheet.text]);
   useEffect(() => {
     if (!on) return;
     let alive = true;
     setTiming(null);
-    loadTiming(song, lines)
+    loadTiming(song, lines, { voice: mine })
       .catch(() => ({ none: true, soft: true }))
       .then((tm) => alive && setTiming(tm));
     return () => {
       alive = false;
     };
-  }, [on, song.id, sig]);
+  }, [on, song.id, sig, mine]);
 
   // 動画の候補を探して、並べ直す
   const loadCands = async (tm = timing) => {
@@ -395,8 +407,8 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   live.current = { video, timing, cands, findVideo };
 
   useEffect(() => {
-    if (on && timing && !video && !err) findVideo();
-  }, [on, timing, video?.id]);
+    if (on && !mine && timing && !video && !err) findVideo();
+  }, [on, mine, timing, video?.id]);
 
   // リンクで選んだ動画などは、流れ始めてから長さと題名が分かる
   useEffect(() => {
@@ -410,11 +422,12 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   }, [on, video?.id, yt.ui.state]);
 
   const saveFix = (patch) => {
+    if (!fixKey) return;
     const all = { ...(st.ytFix || {}) };
-    all[video.id] = { ...(all[video.id] || {}), ...patch };
-    // 動画ごとの合わせ込みは、曲ごとに3つぶんまで覚える
+    all[fixKey] = { ...(all[fixKey] || {}), ...patch };
+    // 動画(音源)ごとの合わせ込みは、曲ごとに3つぶんまで覚える
     const keys = Object.keys(all);
-    if (keys.length > 3) for (const k of keys.slice(0, keys.length - 3)) if (k !== video.id) delete all[k];
+    if (keys.length > 3) for (const k of keys.slice(0, keys.length - 3)) if (k !== fixKey) delete all[k];
     setSt({ ytFix: all });
   };
 
@@ -423,14 +436,13 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     if (timing?.lines) return timing.lines.map((L, i) => (L ? { line: i, t: L.t + offAt(L.t) } : null)).filter(Boolean);
     return fix?.anchors || [];
   }, [timing, fix?.pts, fix?.anchors]);
-  const dur = video?.dur || (song.durationMs ? song.durationMs / 1000 : 0);
+  const dur = mine ? own.own.dur || 0 : video?.dur || (song.durationMs ? song.durationMs / 1000 : 0);
   // 時刻が何も分からない曲は、譜面全体を動画の長さに割り振る(大きく外れるときは BPM どおり)
   const even = dur && totalBeats ? totalBeats / dur : 0;
   const bps = !anchors.length && even && even > (bpm / 60) * 0.6 && even < (bpm / 60) * 1.7 ? even : bpm / 60;
-  const clock =
-    on && video
-      ? { time: yt.api.time, seekTime: yt.api.seek, play: yt.api.play, pause: yt.api.pause, ended: yt.api.ended, duration: () => yt.api.duration() || dur, anchors, bps, sync: syncing }
-      : null;
+  const pa = player.api;
+  const ready = mine ? !!own.rec : !!video;
+  const clock = on && ready ? { time: pa.time, seekTime: pa.seek, play: pa.play, pause: pa.pause, ended: pa.ended, duration: () => pa.duration() || dur, anchors, bps, sync: syncing } : null;
 
   const nextT = (i) => {
     const ls = timing?.lines;
@@ -442,15 +454,17 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   // 譜面を押した。hit: { i, k, pos, onChord }。beat: その場所の拍(時刻の分からない行で使う)
   const tap = (hit, beat) => {
     const s = scrollApi.current;
-    if (!video) {
-      toast(err ? '動画がまだ決まっていません。下の「曲」から動画を選んでください' : '動画を準備しています。少し待ってから押してください');
+    if (!ready) {
+      if (mine)
+        toast(own.status === 'missing' ? 'この曲の音源は、まだこの端末にありません。下の「曲」から音源のファイルを選んでください' : '音源を準備しています。少し待ってから押してください');
+      else toast(err ? '動画がまだ決まっていません。下の「曲」から動画を選んでください' : '動画を準備しています。少し待ってから押してください');
       return;
     }
     const L = timing?.lines?.[hit.i] || null;
     const t = L ? tapTime(L, lines[hit.i], hit, nextT(hit.i)) : null;
     if (syncing) {
       // 歌に合わせる: いま流れている位置が、押した歌詞の位置
-      const now = Math.max(0, yt.api.time() - REACT * speed);
+      const now = Math.max(0, pa.time() - REACT * speed);
       if (timing?.lines) {
         if (t == null) {
           toast('この行は時刻が分からないので、歌詞のある行を押してください');
@@ -491,6 +505,14 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     setErr(null);
     setSt(want ? { ytOn: true, recOn: false } : { ytOn: false });
   };
+  // 流す音を選ぶ: 'own'(自分の音源) | 'yt'(YouTube)
+  const setSource = (src) => {
+    if ((src === 'own') === mine) return;
+    scrollApi.current?.stop();
+    setSyncing(false);
+    setErr(null);
+    setSt({ musicSrc: src === 'yt' ? 'yt' : null, ytOn: true, recOn: false });
+  };
   const pick = (v, by = 'user') => {
     scrollApi.current?.stop();
     setSyncing(false);
@@ -508,50 +530,93 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   };
   const setSpeed = (v) => {
     setSpeedState(v);
-    yt.api.setRate(v);
+    player.api.setRate(v);
   };
+  // 流す音を切りかえたら、選んでいた速さをそのまま使う
+  useEffect(() => {
+    if (mine && speed !== 1) mp.api.setRate(speed);
+  }, [mine]);
   const startSync = () => {
     setSyncing(true);
     const s = scrollApi.current;
     if (s && !s.isPlaying()) s.start();
   };
 
-  // 動画と時刻の出どころが食い違うとき(別の動画・長さの違う版)は、ずれているかもしれない
+  // 動画(音源)と時刻の出どころが食い違うとき(別の動画・長さの違う版)は、ずれているかもしれない
   const albumDur = song.durationMs ? song.durationMs / 1000 : 0;
+  const srcDur = mine ? own.own.dur || 0 : video?.dur || 0;
   const mismatch =
-    !!timing?.lines && !!video && !pts.length && ((timing.base === 'yt' && timing.vid !== video.id) || (timing.base === 'album' && albumDur > 0 && video.dur > 0 && Math.abs(video.dur - albumDur) > 2.5));
-  const status = busy
+    !!timing?.lines &&
+    ready &&
+    !pts.length &&
+    ((timing.base === 'yt' && (mine || timing.vid !== video.id)) || (timing.base === 'album' && albumDur > 0 && srcDur > 0 && Math.abs(srcDur - albumDur) > 2.5));
+  const ownStatus = !mine
+    ? null
+    : own.status === 'check'
+      ? { kind: 'busy', text: '音源を確かめています…' }
+      : own.status === 'down'
+        ? { kind: 'busy', text: `音源をこの端末に持ってきています… ${Math.round(own.prog * 100)}%（はじめの1回だけ）` }
+        : own.status === 'missing'
+          ? { kind: 'error', text: 'この曲の音源は、まだこの端末にありません（ほかの端末から送れていません）。ここでも使うときは、ファイルを選んでください', action: 'own' }
+          : own.status === 'error'
+            ? { kind: 'error', text: `音源を取ってこられませんでした（${own.err}）`, action: 'retryOwn' }
+            : mp.ui.error
+              ? { kind: 'error', text: 'この音源のファイルを読めませんでした。別のファイルを選んでください', action: 'own' }
+              : !mp.ui.ready
+                ? { kind: 'busy', text: '音源を読み込んでいます…' }
+                : null;
+  const status = ownStatus
+    ? ownStatus
+    : busy
     ? { kind: 'busy', text: '原曲の動画を探しています…' }
-    : err
+    : err && !mine
       ? { kind: 'error', text: err, action: 'pick' }
-      : yt.ui.error === 'load'
+      : !mine && yt.ui.error === 'load'
         ? { kind: 'error', text: 'YouTube を読み込めませんでした。通信を確かめてください' }
-        : !video
+        : !ready
           ? { kind: 'busy', text: '歌詞の時刻を調べています…' }
           : syncing
             ? { kind: 'sync', text: timing?.lines ? '曲を流しながら、いま歌っている歌詞をタップ（その場所に合わせます）' : '曲を流しながら、歌い出した行をタップ（何か所か押すと、その時刻を覚えます）', action: 'syncEnd' }
-            : yt.ui.blocked
+            : !mine && yt.ui.blocked
               ? { kind: 'warn', text: '動画が始まらないときは、動画の ▶ を押してください（iPhone・iPad は最初の1回だけ必要です）' }
               : !timing
                 ? { kind: 'busy', text: '歌詞の時刻を調べています…' }
                 : timing.none && !anchors.length
                   ? { kind: 'warn', text: 'この曲は歌詞の時刻が見つかりませんでした。「合わせる」を押して、歌い出した行をタップすると覚えます', action: 'sync' }
                   : mismatch
-                    ? { kind: 'warn', text: '動画と譜面がずれるときは「合わせる」を押して、いま歌っている歌詞をタップしてください', action: 'sync' }
+                    ? { kind: 'warn', text: `${mine ? '音源' : '動画'}と譜面がずれるときは「合わせる」を押して、いま歌っている歌詞をタップしてください`, action: 'sync' }
                     : tip
-                      ? { kind: 'tip', text: '歌詞やコードを押すと、そこから曲が流れます' }
+                      ? { kind: 'tip', text: mine ? `歌詞やコードを押すと、そこから自分の音源が流れます${semis ? `（キー ${signed(semis)} の高さで）` : ''}` : '歌詞やコードを押すと、そこから曲が流れます' }
                       : null;
 
   return {
     on,
     video,
+    mine,
     clock,
     tap,
     toggle,
     syncing,
-    dock: { yt, video, mode: yt.ui.blocked && mode === 'hidden' ? 'small' : mode, setMode, speed, setSpeed, status, onSync: startSync, onSyncEnd: () => setSyncing(false) },
+    dock: {
+      yt,
+      player,
+      mine,
+      ownName: mine ? own.own.name : '',
+      semis,
+      video,
+      mode: !mine && yt.ui.blocked && mode === 'hidden' ? 'small' : mode,
+      setMode,
+      speed,
+      setSpeed,
+      status,
+      onSync: startSync,
+      onSyncEnd: () => setSyncing(false),
+    },
     panel: {
       video,
+      mine,
+      own,
+      setSource,
       cands,
       loadCands: () => (cands ? null : loadCands().catch((e) => setErr(`動画を探せませんでした（${e.message}）`))),
       pick,
@@ -573,13 +638,14 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
 
 // ---------------------------------------------------------------- 動画の窓と、再生位置のつまみ
 
-export function MusicDock({ yt, video, mode, setMode, speed, setSpeed, status, onSync, onSyncEnd, onPanel }) {
+export function MusicDock({ yt, player, mine, semis, video, mode, setMode, speed, setSpeed, status, onSync, onSyncEnd, onPanel, onPickOwn, onRetryOwn, onKey }) {
   const [time, setTime] = useState({ t: 0, d: 0 });
   useEffect(() => {
-    const id = setInterval(() => setTime({ t: yt.api.time(), d: yt.api.duration() || video?.dur || 0 }), 250);
+    const id = setInterval(() => setTime({ t: player.api.time(), d: player.api.duration() || video?.dur || 0 }), 250);
     return () => clearInterval(id);
-  }, [video?.id]);
+  }, [video?.id, mine]);
   const cycle = () => setSpeed(RATES[(RATES.indexOf(speed) + 1) % RATES.length]);
+  const can = mine ? player.ui.ready : !!video;
   const act =
     status?.action === 'sync'
       ? html`<button className="btn btn-sm btn-primary" onClick=${onSync}>合わせる</button>`
@@ -587,25 +653,35 @@ export function MusicDock({ yt, video, mode, setMode, speed, setSpeed, status, o
         ? html`<button className="btn btn-sm" onClick=${onSyncEnd}>おわる</button>`
         : status?.action === 'pick'
           ? html`<button className="btn btn-sm btn-primary" onClick=${onPanel}>動画を選ぶ</button>`
-          : null;
+          : status?.action === 'own'
+            ? html`<button className="btn btn-sm btn-primary" onClick=${onPickOwn}>ファイルを選ぶ</button>`
+            : status?.action === 'retryOwn'
+              ? html`<button className="btn btn-sm btn-primary" onClick=${onRetryOwn}>もう一度</button>`
+              : null;
   return html`<${React.Fragment}>
-    <div className=${cx('yt-video', 'is-' + mode, !video && 'is-empty')}>
-      <div className="yt-frame" ref=${yt.setHost}></div>
-      ${video
-        ? html`<div className="yt-video-bar">
-            <button onClick=${() => setMode(mode === 'big' ? 'small' : 'big')}>${mode === 'big' ? '小さく' : '大きく'}</button>
-            <button onClick=${() => setMode('hidden')} aria-label="動画をしまう（音だけ）">しまう</button>
-          </div>`
-        : null}
-    </div>
+    ${mine
+      ? null
+      : html`<div className=${cx('yt-video', 'is-' + mode, !video && 'is-empty')}>
+          <div className="yt-frame" ref=${yt.setHost}></div>
+          ${video
+            ? html`<div className="yt-video-bar">
+                <button onClick=${() => setMode(mode === 'big' ? 'small' : 'big')}>${mode === 'big' ? '小さく' : '大きく'}</button>
+                <button onClick=${() => setMode('hidden')} aria-label="動画をしまう（音だけ）">しまう</button>
+              </div>`
+            : null}
+        </div>`}
     <div className="rec-dock yt-dock">
       ${status ? html`<div className=${cx('yt-status', 'is-' + status.kind)} role="status"><span>${status.text}</span>${act}</div>` : null}
       <div className="rec-row">
+        ${mine ? html`<span className="own-badge" title="自分の音源（広告なし）" aria-label="自分の音源で流しています"><${Icon} name="music" size=${15} /></span>` : null}
         <span className="rec-time">${mmss(time.t)}</span>
-        <input type="range" className="rec-seek" min="0" max=${time.d || 0} step="0.5" value=${Math.min(time.t, time.d || 0)} disabled=${!video} onInput=${(e) => yt.api.seek(Number(e.target.value))} aria-label="曲の再生位置" />
+        <input type="range" className="rec-seek" min="0" max=${time.d || 0} step="0.5" value=${Math.min(time.t, time.d || 0)} disabled=${!can} onInput=${(e) => player.api.seek(Number(e.target.value))} aria-label="曲の再生位置" />
         <span className="rec-time">${mmss(time.d)}</span>
-        <button className=${cx('chip chip-sm rec-speed', speed !== 1 && 'is-on')} onClick=${cycle} disabled=${!video} aria-label="曲の速さ">${speed === 1 ? '1×' : speed + '×'}</button>
-        ${video && mode === 'hidden'
+        ${mine && semis
+          ? html`<button className="chip chip-sm rec-speed is-on" onClick=${onKey} aria-label=${`キー ${signed(semis)} の高さで流しています（押すとキーを変える）`}>${signed(semis)}</button>`
+          : null}
+        <button className=${cx('chip chip-sm rec-speed', speed !== 1 && 'is-on')} onClick=${cycle} disabled=${!can} aria-label="曲の速さ">${speed === 1 ? '1×' : speed + '×'}</button>
+        ${!mine && video && mode === 'hidden'
           ? html`<button className="icon-btn rec-mini" onClick=${() => setMode('small')} aria-label="動画を出す"><${Icon} name="video" size=${18} /></button>`
           : null}
       </div>
@@ -615,28 +691,76 @@ export function MusicDock({ yt, video, mode, setMode, speed, setSpeed, status, o
 
 // ---------------------------------------------------------------- 設定のパネル
 
-export function MusicPanel({ open, onClose, video, cands, loadCands, pick, pickUrl, pts, nudge, hasTiming, anchors, resetFix, onSync, speed, setSpeed, mode, setMode, src, onOff, onApple }) {
+// 自分の音源の置き場所
+function ownWhere(own) {
+  const o = own.own;
+  if (o.path) return 'この端末とクラウド（ほかの端末でも流せます）';
+  if (own.up?.prog != null) return `ほかの端末でも使えるよう、クラウドに送っています… ${Math.round(own.up.prog * 100)}%`;
+  if (own.up?.err) return 'この端末だけ（クラウドに送れませんでした）';
+  if (o.size > CLOUD_MAX) return 'この端末だけ（40MBより大きいので、クラウドには置けません）';
+  if (own.status === 'missing') return 'ほかの端末にだけあります';
+  return 'この端末だけ';
+}
+
+export function MusicPanel({ open, onClose, video, mine, own, setSource, onPickOwn, cands, loadCands, pick, pickUrl, pts, nudge, hasTiming, anchors, resetFix, onSync, speed, setSpeed, mode, setMode, src, onOff, onApple }) {
   const [url, setUrl] = useState('');
   useEffect(() => {
-    if (open) loadCands();
-  }, [open]);
+    if (open && !mine) loadCands();
+  }, [open, mine]);
   const list = (cands || []).slice(0, 8);
   const off = pts.length === 1 ? pts[0].off : 0;
   const fixed = pts.length > 0 || anchors > 0;
   const offTxt = pts.length > 1 ? `${pts.length}か所で合わせています` : Math.abs(off) < 0.05 ? '' : `${off > 0 ? '譜面を遅く' : '譜面を早く'} ${Math.abs(off).toFixed(1)}秒`;
+  const o = own?.own || null;
+  const removeOwn = () => {
+    if (!confirm('この曲の音源を外しますか？（この端末とクラウドから消えます。元のファイルはそのままです）')) return;
+    own.remove();
+  };
   return html`<${Sheet} open=${open} onClose=${onClose} title="曲と合わせる">
-    <p className="panel-lead">原曲の動画をアプリの中で流します。<b>歌詞やコードを押すと、そこから曲が流れ</b>、譜面もいっしょに進みます。コードの押さえ方は、コードを<b>長押し</b>で見られます。</p>
-    ${video
-      ? html`<div className="yt-now">
-          <img src=${thumb(video.id)} alt="" width="96" height="54" />
-          <span><b>${video.title || '（題名は流すと出ます）'}</b><small>${[video.channel, video.dur ? mmss(video.dur) : ''].filter(Boolean).join(' ・ ')}</small></span>
-        </div>`
-      : null}
+    <p className="panel-lead">原曲をアプリの中で流します。<b>歌詞やコードを押すと、そこから曲が流れ</b>、譜面もいっしょに進みます。コードの押さえ方は、コードを<b>長押し</b>で見られます。</p>
+
+    <div className="panel-field">
+      <div className="panel-field-label">流す音</div>
+      ${o
+        ? html`<${Segmented}
+            label="流す音"
+            value=${mine ? 'own' : 'yt'}
+            onChange=${setSource}
+            options=${[
+              { value: 'own', label: '自分の音源（広告なし）' },
+              { value: 'yt', label: 'YouTube' },
+            ]}
+          />`
+        : null}
+      ${o && mine
+        ? html`<div className="own-now">
+              <span className="own-icon"><${Icon} name="music" size=${20} /></span>
+              <span className="own-text">
+                <b>${o.name.replace(/\.[^.]+$/, '')}</b>
+                <small>${[o.dur ? mmss(o.dur) : '', o.size ? mb(o.size) : ''].filter(Boolean).join(' ・ ')}</small>
+                <small>${ownWhere(own)}</small>
+              </span>
+            </div>
+            <div className="row-gap">
+              <button className="btn btn-sm" onClick=${onPickOwn}>別のファイルにする</button>
+              ${own.up?.err && o.size <= CLOUD_MAX ? html`<button className="btn btn-sm" onClick=${own.retryUpload}>クラウドにもう一度送る</button>` : null}
+              <button className="btn btn-sm btn-ghost" onClick=${removeOwn}>外す</button>
+            </div>
+            <p className="panel-note">キーを変えると、その高さで流れます（上の「キー」）。ゆっくりにしても音程は変わりません。広告は入りません。</p>`
+        : !o
+          ? html`<div className="own-cta">
+              <b>広告なしで、1曲まるごと好きなキーで</b>
+              <p>自分で持っている原曲のファイル（買った曲・CD から取り込んだ曲など）を入れると、広告なしで流せます。キーを変えればその高さで、ゆっくりにしても音程はそのままです。iPhone・iPad・パソコンのどれで入れても、ほかの端末でもそのまま流せます。</p>
+              <button className="btn btn-primary" onClick=${onPickOwn}><${Icon} name="upload" size=${18} />音源ファイルを選ぶ</button>
+              <small>Apple Music で聴いている曲は保護されていて使えません。iTunes Store で買った曲は、パソコンの Apple Music アプリ（または iTunes）でダウンロードすると、ファイルとして選べます。</small>
+            </div>`
+          : null}
+    </div>
 
     <div className="panel-field">
       <div className="panel-field-label">曲と譜面がずれるとき<b className=${cx('speed-now', fixed && 'is-on')}>${hasTiming ? offTxt : anchors ? `${anchors}か所で合わせています` : ''}</b></div>
       <div className="row-gap">
-        <button className="btn btn-primary" disabled=${!video} onClick=${() => { onClose(); onSync(); }}>歌に合わせる</button>
+        <button className="btn btn-primary" disabled=${mine ? !own?.rec : !video} onClick=${() => { onClose(); onSync(); }}>歌に合わせる</button>
         ${hasTiming
           ? html`<${React.Fragment}>
               <button className="btn" onClick=${() => nudge(-0.1)} aria-label="譜面を0.1秒早く">早く</button>
@@ -655,31 +779,42 @@ export function MusicPanel({ open, onClose, video, cands, loadCands, pick, pickU
       <div className="panel-field-label">曲の速さ（音程はそのまま）</div>
       <${Segmented} label="曲の速さ" value=${speed} onChange=${setSpeed} options=${RATES.map((v) => ({ value: v, label: v === 1 ? 'そのまま' : `${v}×` }))} />
     </div>
-    <div className="panel-field">
-      <div className="panel-field-label">動画の窓</div>
-      <${Segmented} label="動画の窓" value=${mode} onChange=${setMode} options=${[{ value: 'small', label: '小さく' }, { value: 'big', label: '大きく' }, { value: 'hidden', label: 'しまう（音だけ）' }]} />
-    </div>
-
-    <div className="menu-group">
-      <div className="menu-title">別の動画にする</div>
-      ${!cands ? html`<p className="panel-note">動画を探しています…</p>` : null}
-      ${list.map(
-        (v) => html`<button key=${v.id} className=${cx('menu-item yt-cand', video?.id === v.id && 'is-on')} onClick=${() => video?.id !== v.id && pick(v)}>
-          <img src=${thumb(v.id)} alt="" width="64" height="36" loading="lazy" />
-          <span className="menu-item-text">${v.title}<small>${[v.channel, v.dur ? mmss(v.dur) : '', v.timed ? 'コードの時刻つき' : ''].filter(Boolean).join(' ・ ')}</small></span>
-          ${video?.id === v.id ? html`<${Icon} name="check" />` : null}
-        </button>`,
-      )}
-      <form className="yt-url" onSubmit=${(e) => { e.preventDefault(); if (pickUrl(url)) setUrl(''); }}>
-        <input type="url" inputMode="url" placeholder="YouTube のリンクを貼る" value=${url} onInput=${(e) => setUrl(e.target.value)} aria-label="YouTube のリンク" />
-        <button className="btn" type="submit" disabled=${!url.trim()}>この動画にする</button>
-      </form>
-    </div>
+    ${mine
+      ? null
+      : html`<${React.Fragment}>
+          <div className="panel-field">
+            <div className="panel-field-label">動画の窓</div>
+            <${Segmented} label="動画の窓" value=${mode} onChange=${setMode} options=${[{ value: 'small', label: '小さく' }, { value: 'big', label: '大きく' }, { value: 'hidden', label: 'しまう（音だけ）' }]} />
+          </div>
+          ${video
+            ? html`<div className="yt-now">
+                <img src=${thumb(video.id)} alt="" width="96" height="54" />
+                <span><b>${video.title || '（題名は流すと出ます）'}</b><small>${[video.channel, video.dur ? mmss(video.dur) : ''].filter(Boolean).join(' ・ ')}</small></span>
+              </div>`
+            : null}
+          <div className="menu-group">
+            <div className="menu-title">別の動画にする</div>
+            ${!cands ? html`<p className="panel-note">動画を探しています…</p>` : null}
+            ${list.map(
+              (v) => html`<button key=${v.id} className=${cx('menu-item yt-cand', video?.id === v.id && 'is-on')} onClick=${() => video?.id !== v.id && pick(v)}>
+                <img src=${thumb(v.id)} alt="" width="64" height="36" loading="lazy" />
+                <span className="menu-item-text">${v.title}<small>${[v.channel, v.dur ? mmss(v.dur) : '', v.timed ? 'コードの時刻つき' : ''].filter(Boolean).join(' ・ ')}</small></span>
+                ${video?.id === v.id ? html`<${Icon} name="check" />` : null}
+              </button>`,
+            )}
+            <form className="yt-url" onSubmit=${(e) => { e.preventDefault(); if (pickUrl(url)) setUrl(''); }}>
+              <input type="url" inputMode="url" placeholder="YouTube のリンクを貼る" value=${url} onInput=${(e) => setUrl(e.target.value)} aria-label="YouTube のリンク" />
+              <button className="btn" type="submit" disabled=${!url.trim()}>この動画にする</button>
+            </form>
+          </div>
+        </${React.Fragment}>`}
 
     <div className="menu-group">
       <button className="menu-item" onClick=${() => { onClose(); onApple(); }}><${Icon} name="headphones" /><span className="menu-item-text">Apple Music で原曲を開く<small>Music アプリで聴くとき（譜面とは連動しません）</small></span></button>
       <button className="menu-item" onClick=${() => { onClose(); onOff(); }}><${Icon} name="metronome" /><span className="menu-item-text">曲と合わせるのをやめる（BPMで流す）</span></button>
     </div>
-    <p className="panel-note">広告は YouTube が動画の中に入れるもので、アプリからは消せません。出にくくなるよう、個人に合わせた広告を出さない読み込み方（YouTube のプライバシー強化モード）にして、動画は曲ごとに一度だけ読み込み、歌詞を押しても読み直しません。それでも入ることはあります。</p>
+    ${mine
+      ? null
+      : html`<p className="panel-note">YouTube の広告は、YouTube が動画に入れるものです。消したり飛ばしたりすることは YouTube の決まりで禁じられているので、アプリからはできません（出にくくなる読み込み方にはしています）。広告なしで流したいときは、上の「音源ファイルを選ぶ」で自分の音源を使ってください。</p>`}
   </${Sheet}>`;
 }

@@ -4259,85 +4259,106 @@ body:has(.rec-dock) .toast-host {
   font-size: 0.82rem;
   color: var(--danger);
 }
+.kh-full-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
 .kh-full {
   gap: 8px;
+  min-height: 46px;
 }
-.kh-live {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  font-size: 0.86rem;
-  font-weight: 700;
-}
-.kh-live span {
+.kh-apple {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
 }
-.kh-live i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: kh-blink 1.4s ease-in-out infinite;
+
+/* ---------------------------------------------------------------- 自分の音源(曲と合わせるのパネル・下の再生バー) */
+.own-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
 }
-@keyframes kh-blink {
-  50% {
-    opacity: 0.3;
-  }
+.own-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
-@media (prefers-reduced-motion: reduce) {
-  .kh-live i {
-    animation: none;
-  }
+.own-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-/* 小さい窓(key.html) */
-.kp-body {
-  background: var(--bg);
-}
-.kp {
-  max-width: 420px;
-  margin: 0 auto;
-  padding: 18px 16px 24px;
-}
-.kp-title {
-  margin: 0;
-  font-size: 1.05rem;
-}
-.kp-song {
-  margin: 4px 0 0;
-  font-size: 0.86rem;
-  color: var(--muted);
+.own-text b {
+  font-size: 0.92rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.kp-key {
+.own-text small {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.own-cta {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.own-cta b {
+  font-size: 0.95rem;
+}
+.own-cta p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.65;
+  color: var(--text);
+}
+.own-cta small {
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.own-cta .btn {
+  gap: 8px;
+  margin: 2px 0;
+}
+.panel-field > .segmented + .own-now {
+  margin-top: 12px;
+}
+.own-badge {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 18px;
-  margin: 16px 0 14px;
-}
-.kp-key-mid {
-  min-width: 7em;
-  text-align: center;
-}
-.kp-start {
-  width: 100%;
-  min-height: 50px;
-}
-.kp-steps {
-  margin: 14px 0 0;
-  padding-left: 1.3em;
-  font-size: 0.86rem;
-  line-height: 1.7;
-}
-.kp-live {
-  justify-content: flex-start;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
