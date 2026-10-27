@@ -547,3 +547,114 @@ export function rankCapos(counts, soundingKey, { easy = false, maxCapo = 7 } = {
 }
 
 export { noteName };
+
+// ---------------------------------------------------------------- 押さえ方の説明
+
+const FINGER_NAMES = { 1: '人差し指', 2: '中指', 3: '薬指', 4: '小指', T: '親指' };
+const strNo = (i) => 6 - i; // frets の並び(0=6弦)→ 弦の番号
+const strList = (is) => {
+  const ns = is.map(strNo).sort((a, b) => b - a);
+  // となり合う3本以上は「6〜4弦」のようにまとめる
+  const out = [];
+  for (let k = 0; k < ns.length; ) {
+    let e = k;
+    while (e + 1 < ns.length && ns[e + 1] === ns[e] - 1) e++;
+    out.push(e - k >= 2 ? `${ns[k]}〜${ns[e]}` : ns.slice(k, e + 1).join('・'));
+    k = e + 1;
+  }
+  return out.join('・') + '弦';
+};
+
+// 押さえやすさの目安(voicingDifficulty から)
+export function difficultyLabel(d) {
+  return d < 2.5 ? 'やさしい' : d < 3.6 ? 'ふつう' : 'むずかしい';
+}
+
+// 指ごとの押さえ方: [{ finger, name, text }]。最後に開放・鳴らさない弦
+export function fingerSteps(v) {
+  if (!v) return [];
+  const by = new Map();
+  v.frets.forEach((f, i) => {
+    if (f <= 0) return;
+    const fg = v.fingers[i] || 0;
+    if (!by.has(fg)) by.set(fg, []);
+    by.get(fg).push(i);
+  });
+  const steps = [];
+  for (const fg of [1, 2, 3, 4, 'T', 0]) {
+    const is = by.get(fg);
+    if (!is) continue;
+    const name = FINGER_NAMES[fg] || '指';
+    if (fg === 1 && v.barre) {
+      const all = [];
+      for (let i = v.barre.from; i <= v.barre.to; i++) if (v.frets[i] >= 0) all.push(i);
+      const rest = is.filter((i) => v.frets[i] !== v.barre.fret);
+      steps.push({ finger: 1, name, text: `${v.barre.fret}フレットで ${strList(all)} をまとめて押さえる（セーハ）` });
+      if (rest.length) steps.push({ finger: 1, name, text: rest.map((i) => `${strNo(i)}弦の${v.frets[i]}フレット`).join('、') });
+      continue;
+    }
+    const frets = [...new Set(is.map((i) => v.frets[i]))];
+    const text =
+      is.length > 1 && frets.length === 1
+        ? `${frets[0]}フレットで ${strList(is)} をまとめて押さえる`
+        : is.map((i) => `${strNo(i)}弦の${v.frets[i]}フレット`).join('、');
+    steps.push({ finger: fg, name, text });
+  }
+  const opens = v.frets.map((f, i) => (f === 0 ? i : -1)).filter((i) => i >= 0);
+  const mutes = v.frets.map((f, i) => (f < 0 ? i : -1)).filter((i) => i >= 0);
+  if (opens.length) steps.push({ finger: 'o', name: '開放', text: `${strList(opens)} は押さえずに鳴らす` });
+  if (mutes.length) steps.push({ finger: 'x', name: '鳴らさない', text: `${strList(mutes)} は弾かない` });
+  return steps;
+}
+
+// その形のコツ(むずかしいところだけ)
+export function pressTips(v) {
+  if (!v) return [];
+  const tips = [];
+  if (v.barre?.full)
+    tips.push('セーハは人差し指を少し親指側に転がして、指の骨のかたい側で押さえると鳴りやすい。ネックの裏の親指は人差し指の真裏あたりに。');
+  else if (v.barre) tips.push('人差し指の先のほうだけを寝かせて、必要な弦だけをまとめて押さえる。');
+  if (v.fingers.includes('T')) tips.push('親指をネックの上からまわして、6弦を押さえる。');
+  if (v.innerMutes) {
+    const is = [];
+    const s = v.frets.findIndex((f) => f >= 0);
+    for (let i = s; i < 6; i++) if (v.frets[i] < 0 && v.frets.slice(i).some((f) => f >= 0)) is.push(i);
+    tips.push(`${strList(is)}は、となりを押さえている指の腹で軽くふれて音を消す。`);
+  }
+  if (v.leadMutes && !v.innerMutes) tips.push(`${strNo(v.leadMutes)}弦から弾き始める（${strList([...Array(v.leadMutes).keys()])}は弾かない）。`);
+  if (v.trailMutes) tips.push('1弦側を鳴らさない形。ストロークを小さめにするか、押さえている指で1弦にふれて消す。');
+  if (v.span >= 3) tips.push('指を大きく広げる形。手首を少し前に出して、手のひらとネックのあいだにすき間を作ると届きやすい。');
+  if (v.opens && v.frets.some((f) => f > 0) && !v.barre)
+    tips.push('指を立てて押さえると、開放弦にふれて音がつまるのを防げる。');
+  return tips;
+}
+
+// 響きの近い、押さえやすいコード: [{ name, why, diff }](やさしい順・3つまで)。cur = いまの形の難しさ
+export function nearChords(name, cur) {
+  const ch = parseChord(name);
+  if (!ch || ch.special || ch.bassOnly) return [];
+  const root = ch.rootName;
+  const tri = triadSuffix(ch);
+  const cands = [];
+  const add = (n, why, pen) => {
+    if (n === name || !parseChord(n) || cands.some((c) => c.name === n)) return;
+    const vs = guitarVoicings(n);
+    if (!vs.length) return;
+    cands.push({ name: n, why, diff: voicingDifficulty(vs[0]), cost: voicingDifficulty(vs[0]) + pen });
+  };
+  if (ch.bass != null) add(root + ch.suffix, `下の音（${ch.bassName}）の指定を外した形`, 0.2);
+  const sev = seventhSuffix(ch);
+  if (sev !== ch.suffix) add(root + sev, `${ch.suffix} の飾りの音を省いた形`, 0.25);
+  add(root + tri, tri === 'm' ? 'いちばん基本のマイナーの3和音' : tri === '' ? 'いちばん基本の3和音' : '基本の3和音', 0.4);
+  if (tri === '' && !ch.st.seventh) {
+    add(root + 'M7', 'ひとつ音を足した形。少しやわらかい響きになる', 0.6);
+    add(root + '7', 'ひとつ音を足した形。少し次へ進みたい響きになる', 0.9);
+    add(root + 'add9', 'ひとつ音を足した形。少し広がる響きになる', 0.7);
+  }
+  if (tri === 'm' && !ch.st.seventh) add(root + 'm7', 'ひとつ音を足した形。少しやわらかい響きになる', 0.4);
+  if (ch.st.third === 'sus4' || ch.st.third === 'sus2') add(root + (tri === 'sus4' ? '' : tri), '基本の3和音', 0.5);
+  return cands
+    .filter((c) => c.diff < cur - 0.4 && c.diff < 3.6)
+    .sort((a, b) => a.cost - b.cost)
+    .slice(0, 3);
+}

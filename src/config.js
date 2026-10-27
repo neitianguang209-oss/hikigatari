@@ -4,4 +4,4 @@ export const FN_URL = 'https://gzayrjlhruhvklsidraw.supabase.co/functions/v1/hik
 export const YT_FN_URL = 'https://gzayrjlhruhvklsidraw.supabase.co/functions/v1/hikigatari-yt';
 // 自分の音源ファイルを端末どうしで共有する(非公開の置き場への、期限つきの URL をもらう)
 export const AUDIO_FN_URL = 'https://gzayrjlhruhvklsidraw.supabase.co/functions/v1/hikigatari-audio';
-export const APP_VERSION = '1.22.1';
+export const APP_VERSION = '1.23.0';

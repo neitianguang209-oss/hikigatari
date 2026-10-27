@@ -19,7 +19,7 @@ import { TunerSheet, prepareTuner } from './tuner.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
-import { rankCapos, shapeName, guitarVoicings, standardVoicing, planVoicings } from '../music/guitar.js';
+import { rankCapos, shapeName, easyName, guitarVoicings, standardVoicing, planVoicings, voicingDifficulty, difficultyLabel, fingerSteps, pressTips, nearChords } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { detectModulation } from '../music/modulation.js';
 import { lib, useSong, media, local } from '../lib/store.js';
@@ -241,8 +241,10 @@ function SongReady({ song, reload }) {
     return m;
   }, [shiftSet, instrument, follow, capo, capoLimit, countsBy, easy, prefs.maxCapo, soundKey.pc, soundKey.minor]);
 
-  // 画面に出すコード名(ずれごと)。ギターはカポをつけて押さえる形、ピアノは実際に鳴る音
-  const nameMaps = (withEasy) => {
+  // 画面に出すコード名(ずれごと)。ギターはカポをつけて押さえる形、ピアノは実際に鳴る音。
+  // 押さえ方のパネルで「この曲ではこれで弾く」を選んだコード(st.subs: 形の名前 → 置き換えるコード)は、かんたんモードより優先
+  const subs = instrument === 'guitar' ? st.subs || {} : {};
+  const nameMaps = (withEasy, withSubs = true) => {
     const out = new Map();
     for (const k of shiftSet) {
       const c = segCapo.get(k);
@@ -250,16 +252,22 @@ function SongReady({ song, reload }) {
       const m = new Map();
       for (const t of stats.order) {
         const snd = sounding.get(t);
-        m.set(t, instrument === 'guitar' ? shapeName(snd, c, sk, withEasy) : snd);
+        if (instrument !== 'guitar') {
+          m.set(t, snd);
+          continue;
+        }
+        const shaped = shapeName(snd, c, sk, false);
+        m.set(t, (withSubs && subs[shaped]) || (withEasy ? easyName(shaped, sk) : shaped));
       }
       out.set(k, m);
     }
     return out;
   };
-  const displays = useMemo(() => nameMaps(easy), [shiftSet, segCapo, stats, sounding, instrument, easy, soundKey.pc, soundKey.minor]);
+  const subsKey = JSON.stringify(subs);
+  const displays = useMemo(() => nameMaps(easy), [shiftSet, segCapo, stats, sounding, instrument, easy, soundKey.pc, soundKey.minor, subsKey]);
   const display = displays.get(0) || displays.values().next().value;
-  // かんたんモードで置き換える前の形の名前(置き換えたコードの説明に使う)
-  const plainDisplays = useMemo(() => (instrument === 'guitar' ? nameMaps(false) : new Map()), [shiftSet, segCapo, stats, sounding, instrument, soundKey.pc, soundKey.minor]);
+  // かんたんモード・自分で置き換える前の形の名前(置き換えたコードの説明に使う)
+  const plainDisplays = useMemo(() => (instrument === 'guitar' ? nameMaps(false, false) : new Map()), [shiftSet, segCapo, stats, sounding, instrument, soundKey.pc, soundKey.minor]);
 
   // コードごとに見せる押さえ方。通常は教本どおり、かんたんモードは曲の流れ(前後のコード)まで見て選ぶ。
   // 「いつもこの形」で自分で選んだ形があれば、それがいちばん優先
@@ -825,7 +833,7 @@ function SongReady({ song, reload }) {
     if (chordTap.display) {
       const name = chordTap.display;
       let plain = null;
-      if (easy)
+      if (instrument === 'guitar')
         for (const [k, d] of displays) {
           for (const [t, n] of d) if (n === name) { plain = plainDisplays.get(k)?.get(t) || null; break; }
           if (plain) break;
@@ -833,8 +841,19 @@ function SongReady({ song, reload }) {
       return { name, snd: null, plain };
     }
     const k = shifts[chordTap.line] ?? 0;
-    return { name: displays.get(k)?.get(chordTap.token) || chordTap.token, snd: sounding.get(chordTap.token), plain: easy ? plainDisplays.get(k)?.get(chordTap.token) || null : null };
+    return { name: displays.get(k)?.get(chordTap.token) || chordTap.token, snd: sounding.get(chordTap.token), plain: plainDisplays.get(k)?.get(chordTap.token) || null };
   }, [chordTap, displays, plainDisplays, sounding, easy, modulation]);
+  // 押さえ方のパネルの「この曲ではこれで弾く」/「元に戻す」(to = null)
+  const onSub = (from, to) => {
+    const next = { ...subs };
+    if (to) next[from] = to;
+    else delete next[from];
+    setSt({ subs: next });
+    if (chordTap?.display) setChordTap({ display: to || from });
+    // 置き換えた形と「元に戻す」が見えるよう、パネルを上へ
+    document.querySelectorAll('.sheet, .sheet-body').forEach((el) => el.scrollTo?.({ top: 0, behavior: 'smooth' }));
+    toast(to ? `この曲では ${pretty(from)} を ${pretty(to)} で弾きます` : `${pretty(from)} に戻しました`);
+  };
   // 押した高さにある行(歌詞・コードの行)。行と行のあいだ・行の右の空いたところを押しても、いちばん近い行
   const lineAtY = (y) => {
     const sc = scrollRef.current;
@@ -1236,6 +1255,8 @@ function SongReady({ song, reload }) {
       picks=${userPicks}
       shown=${picks}
       easy=${easy}
+      subs=${subs}
+      onSub=${onSub}
     />
   </div>`;
 }
@@ -2086,7 +2107,65 @@ function MorePanel({ open, onClose, song, reload, onText, onTuner, onApple, rec 
 }
 
 // info: { name: 画面のコード名, snd: 実際に鳴る音, plain: かんたんモードで置き換える前の名前 }
-function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, shown = {}, easy = false }) {
+// 押さえ方を言葉で: 指ごとにどの弦の何フレットか＋その形のコツ
+function HowToPress({ voicing }) {
+  const steps = fingerSteps(voicing);
+  const tips = pressTips(voicing);
+  const d = voicingDifficulty(voicing);
+  return html`<section className="how-press">
+    <h3 className="how-head">押さえ方 <span className=${cx('diff-chip', d >= 3.6 && 'is-hard')}>${difficultyLabel(d)}</span></h3>
+    <ol className="finger-steps">
+      ${steps.map((s, k) => html`<li key=${k}>
+        <span className=${cx('fs-num', (s.finger === 'o' || s.finger === 'x') && 'is-plain')}>${s.finger === 'o' ? '○' : s.finger === 'x' ? '×' : s.finger || '・'}</span>
+        <span><b>${s.name}</b> ${s.text}</span>
+      </li>`)}
+    </ol>
+    ${tips.length ? html`<ul className="press-tips">${tips.map((t, k) => html`<li key=${k}>${t}</li>`)}</ul>` : null}
+  </section>`;
+}
+
+// 押さえにくいとき: 同じコードのやさしい形 / 響きの近い押さえやすいコード(この曲ではそれで弾ける)。
+// plain = 置き換えてよい元の名前(すでに置き換えているときは null)
+function EasierWays({ name, plain, voicing, vs, onPick, onSub }) {
+  const cur = voicingDifficulty(voicing);
+  if (cur < 2.5) return null;
+  const shapes = vs
+    .map((x, i) => ({ x, i, d: voicingDifficulty(x) }))
+    .filter((o) => o.x !== voicing && o.d < cur - 0.4 && o.d < 3.6)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 3);
+  const near = plain ? nearChords(name, cur) : [];
+  if (!shapes.length && !near.length) return null;
+  return html`<section className="easier-ways">
+    <h3 className="how-head">もっと押さえやすくするなら</h3>
+    ${shapes.length
+      ? html`<p className="ew-lead">同じ <b><${ChordText} name=${pretty(name)} /></b> のまま、やさしい形</p>
+          <div className="ew-row">
+            ${shapes.map((o) => html`<button key=${o.i} className="ew-card" onClick=${() => onPick(o.i)}>
+              <${GuitarDiagram} voicing=${o.x} width=${88} fingers=${false} compact=${true} />
+              <small>${difficultyLabel(o.d)}</small>
+            </button>`)}
+          </div>`
+      : null}
+    ${near.length
+      ? html`<p className="ew-lead">響きの近い、押さえやすいコード</p>
+          <div className="ew-near">
+            ${near.map((c) => html`<div key=${c.name} className="ew-near-item">
+              <div className="ew-near-fig">
+                <b><${ChordText} name=${pretty(c.name)} /></b>
+                <${GuitarDiagram} voicing=${guitarVoicings(c.name)[0]} width=${80} fingers=${false} compact=${true} />
+              </div>
+              <div className="ew-near-text">
+                <span>${c.why}（${difficultyLabel(c.diff)}）</span>
+                ${onSub ? html`<button className="btn btn-sm btn-primary" onClick=${() => onSub(plain, c.name)}>この曲ではこれで弾く</button>` : null}
+              </div>
+            </div>`)}
+          </div>`
+      : null}
+  </section>`;
+}
+
+function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, shown = {}, easy = false, subs = {}, onSub = null }) {
   const [idx, setIdx] = useState(0);
   const name = info?.name || null;
   const snd = info?.snd || null;
@@ -2137,10 +2216,14 @@ function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, sh
             : v === guitarVoicings(name)[0]
               ? 'いちばんやさしい形'
               : 'ほかの押さえ方';
+    const userSub = !!plain && plain !== name && subs[plain] === name;
     body = html`<div className="chord-detail">
-      ${plain && plain !== name
-        ? html`<p className="eased-note">元のコードは <b><${ChordText} name=${pretty(plain)} /></b>。かんたんモードで、響きの近い <b><${ChordText} name=${pretty(name)} /></b> に置き換えています。</p>`
-        : null}
+      ${userSub
+        ? html`<p className="eased-note">元のコードは <b><${ChordText} name=${pretty(plain)} /></b>。この曲では、響きの近い <b><${ChordText} name=${pretty(name)} /></b> で弾いています。
+            <button className="btn btn-sm" onClick=${() => onSub?.(plain, null)}>元に戻す</button></p>`
+        : plain && plain !== name
+          ? html`<p className="eased-note">元のコードは <b><${ChordText} name=${pretty(plain)} /></b>。かんたんモードで、響きの近い <b><${ChordText} name=${pretty(name)} /></b> に置き換えています。</p>`
+          : null}
       <div className="chord-detail-diagram"><${GuitarDiagram} voicing=${v} width=${250} /></div>
       ${vs.length > 1
         ? html`<div className="row-gap center voicing-nav">
@@ -2163,6 +2246,8 @@ function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, sh
             : null}`
         : null}
       ${v ? html`<p className="muted small center">上が1弦・下が6弦。数字は指（1=人差し指 … 4=小指、T=親指）。○は開放弦、×は鳴らさない弦。</p>` : html`<p className="muted center">この形の図は用意できませんでした。</p>`}
+      ${v ? html`<${HowToPress} voicing=${v} />` : null}
+      ${v ? html`<${EasierWays} name=${name} plain=${userSub ? null : plain || name} voicing=${v} vs=${vs} onPick=${setIdx} onSub=${onSub} />` : null}
     </div>`;
   } else if (name) {
     const pv = pianoVoicing(name, idx);
