@@ -27,8 +27,18 @@ export function Sheet({ open, onClose, title, heading = null, children, wide = f
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
+  // 外側を押して閉じるのは「外側で押して外側で離した」ときだけ。長押しで開いた直後に指を離すと、
+  // iPhone はその場所(=開いたばかりの外側)へ click を送るので、それで閉じないように
+  const downOut = useRef(false);
   if (!mounted) return null;
-  return html`<div className=${cx('sheet-layer', shown && 'is-shown')} onClick=${onClose}>
+  return html`<div
+    className=${cx('sheet-layer', shown && 'is-shown')}
+    onPointerDown=${(e) => (downOut.current = e.target === e.currentTarget)}
+    onClick=${(e) => {
+      if (e.target === e.currentTarget && downOut.current) onClose();
+      downOut.current = false;
+    }}
+  >
     <div className=${cx('sheet', wide && 'sheet-wide')} role="dialog" aria-modal="true" aria-label=${title} onClick=${(e) => e.stopPropagation()}>
       <div className="sheet-grip" aria-hidden="true"></div>
       <div className="sheet-head">
