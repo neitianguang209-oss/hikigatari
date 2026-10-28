@@ -935,6 +935,32 @@ function SongReady({ song, reload }) {
     // 自分の歌: 押したところから録音が流れる(出だしが切れないよう、ほんの少し手前から)
     scroll.playFrom({ beat, time: recOn && recAnchors.length ? Math.max(0, timeAtBeat(beat, recAnchors, recTl.starts, bpm / 60) - 0.12) : null });
   };
+  // iPhone・iPad では、指で弾いて流れている(慣性で動いている)譜面を押すと、止まるだけで click が来ない。
+  // そのときは指を離したところを、押したのと同じに扱う(click も来たら、そちらだけ使う)
+  const touch = useRef({ scrollAt: 0, pending: 0 }).current;
+  const onSheetTouchStart = (e) => {
+    const p = e.touches[0];
+    const now = performance.now();
+    Object.assign(touch, { x: p.clientX, y: p.clientY, at: now, n: e.touches.length, moving: now - touch.scrollAt < 150 });
+  };
+  const onSheetTouchEnd = (e) => {
+    const p = e.changedTouches[0];
+    if (!touch.moving || touch.n !== 1 || !p) return;
+    if (Math.abs(p.clientX - touch.x) + Math.abs(p.clientY - touch.y) > 10 || performance.now() - touch.at > 450) return;
+    const target = document.elementFromPoint(p.clientX, p.clientY) || e.target;
+    const x = p.clientX;
+    const y = p.clientY;
+    clearTimeout(touch.pending);
+    touch.pending = setTimeout(() => {
+      touch.pending = 0;
+      onSheetTap({ target, clientX: x, clientY: y });
+    }, 150);
+  };
+  const onSheetClick = (e) => {
+    clearTimeout(touch.pending);
+    touch.pending = 0;
+    onSheetTap(e);
+  };
   const onSheetTap = (e) => {
     // 見出しなどのボタンはそれぞれの動き。コード名は、歌詞と同じ「そこから流す」(押さえ方は長押し)
     const btn = e.target.closest('button, a, input, select, textarea, .song-head, .strip-top, .mod-mark, .ear-banner, .sheet-end');
@@ -1041,7 +1067,14 @@ function SongReady({ song, reload }) {
     </div>
 
     <div className="song-body">
-      <main className="sheet-scroll" ref=${scrollRef} onClick=${onSheetTap}>
+      <main
+        className="sheet-scroll"
+        ref=${scrollRef}
+        onClick=${onSheetClick}
+        onScroll=${() => (touch.scrollAt = performance.now())}
+        onTouchStart=${onSheetTouchStart}
+        onTouchEnd=${onSheetTouchEnd}
+      >
         <div className="sheet-inner" style=${{ '--fs': fontScale }}>
           ${song.source === 'ear' ? html`<${EarBanner} song=${song} />` : null}
           <div className="song-head">

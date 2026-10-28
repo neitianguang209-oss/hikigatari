@@ -295,6 +295,14 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     s.cur = -1;
   };
 
+  // 指で動かしたあとの「止まったところから続ける」の待ちを取り消す。
+  // スクロールして(慣性で流れている途中も)すぐ行を押すと、0.45秒後にこの待ちが動いて、押した行ではなく
+  // スクロールしていた場所へ戻され、押しても流れないように見えることがあった
+  const dropHold = () => {
+    clearTimeout(s.idle);
+    s.holding = false;
+  };
+
   const frame = (ts) => {
     if (!s.playingFlag) return;
     // 自分の録音に合わせるとき: 録音の再生位置から今の拍を出す(クリックもカウントもしない)
@@ -425,6 +433,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   const start = (fromBeat) => {
     if (!s.tl.timed.length) return;
+    dropHold();
     if (live.current.clock) {
       // 録音: 止めたところから続ける(行を指定されたらその行の時刻から)
       measure();
@@ -481,6 +490,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
   };
 
   const stop = () => {
+    dropHold();
     live.current.clock?.pause();
     s.ramp = null;
     s.playingFlag = false;
@@ -519,6 +529,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
 
   // 流しているあいだに別の拍へ移る: 新しい位置まで0.6秒かけてなめらかに追いつく(一瞬で飛ばない)
   const jumpToBeat = (b) => {
+    dropHold();
     s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
     s.countEnd = null;
     setCountdown(0);
@@ -536,6 +547,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
     const b = s.tl.starts[i] ?? 0;
     if (live.current.clock) {
       if (s.playingFlag) {
+        dropHold();
         s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
         clockSeek(b);
         setRamp(b);
@@ -569,6 +581,7 @@ export function useAutoScroll({ scrollRef, lines, bpm, barsPerLine, beatsPerBar,
       return;
     }
     stopGlide();
+    dropHold();
     s.glide = { from: scrollRef.current?.scrollTop ?? 0, t0: performance.now(), ms: 600 };
     if (time != null) c.seekTime(Math.max(0, Math.min((c.duration() || Infinity) - 0.05, time)));
     else clockSeek(beat);
