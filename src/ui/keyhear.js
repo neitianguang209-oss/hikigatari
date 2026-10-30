@@ -184,23 +184,23 @@ function usePreview({ active, getTrack, semis, voice = 'orig', cacheKey }) {
   return { ui, pos: { t: pos.t, d: pos.d || shared.orig?.duration || 0 }, play, pause, seek, setWhich };
 }
 
-// 30秒だけ聴くところ
-const PARTS = [
-  { mark: 'start', label: '歌い始め' },
-  { mark: 'chorus', label: 'サビ' },
-  { mark: 'bridge', label: 'Cメロ' },
-];
-
 const VOICES = [
   { value: 'orig', label: '歌手の声のまま' },
   { value: 'male', label: '男性っぽく' },
   { value: 'female', label: '女性っぽく' },
 ];
 
-// キーのパネルの中: 声 / 1曲まるごと(自分の音源。歌い始め・サビから) / 試聴30秒(サビのあたり)
-// own: useOwnAudio の戻り値。mine: いま自分の音源で流している。marks: { start, chorus }(行の番号)
-// onPlayFull(from): パネルを閉じて、自分の音源をこのキーで流す(from = 'start' | 'chorus' | null)
-export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, onApple, own, mine, marks = {}, voice = 'orig', setVoice, onPickOwn, onUseOwn, onPlayFull, onBeforePreview }) {
+// 自分の音源で聴くときの聴き方: 最後まで通す / 30秒だけ流して止める
+const HOW = [
+  { value: 'full', label: '最後まで通して' },
+  { value: 'clip', label: '30秒だけ' },
+];
+
+// キーのパネルの中: Apple の試聴をこのキーで(いちばん上) / 声 / 1曲まるごと(自分の音源。いちばん下にしまう)
+// own: useOwnAudio の戻り値。mine: いま自分の音源で流している。marks: { chorus }(行の番号)
+// onPlayFull(from, { clip }): パネルを閉じて、自分の音源をこのキーで流す(from = 'top' | 'chorus' | null)
+// how / setHow: 自分の音源の聴き方('full' | 'clip')
+export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, onApple, own, mine, marks = {}, voice = 'orig', setVoice, how = 'full', setHow, onPickOwn, onUseOwn, onPlayFull, onBeforePreview }) {
   const pv = usePreview({ active, getTrack, semis, voice, cacheKey: songId });
   const { ui, pos } = pv;
   const busy = ui.stage === 'load' || ui.stage === 'shift';
@@ -210,9 +210,9 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
     onBeforePreview?.();
     pv.play();
   };
-  const full = (from, opt) => {
+  const full = (from) => {
     pv.pause();
-    onPlayFull(from, opt);
+    onPlayFull(from, how === 'clip' ? { clip: 30 } : {});
   };
   const removeOwn = () => {
     if (!confirm('この曲の音源を外しますか？（この端末とクラウドから消えます。元のファイルはそのままです）')) return;
@@ -221,52 +221,8 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
   };
   const keyTxt = semis ? `${signed(semis)}（${keyLabel}）` : '原曲キー';
   return html`<div className="kh">
-    <div className="panel-field">
-      <div className="panel-field-label">声<small className="kh-sub">キーを変えて聴くときの声の感じ</small></div>
-      <${Segmented} size="sm" label="声" value=${voice} onChange=${setVoice} options=${VOICES} />
-      <p className="panel-note">「歌手の声のまま」は、高さだけ変えて声の感じ（響き）は元の歌手のまま。女性の歌を下げても女性の声で聞こえます。「男性っぽく」「女性っぽく」は響きを低く・高くします。</p>
-    </div>
-
-    <div className="panel-field">
-      <div className="panel-field-label">1曲まるごと、${keyTxt}で<small className="kh-sub">${has ? '自分の音源・広告なし' : 'iPhone・iPad・パソコン'}</small></div>
-      ${has && mine
-        ? html`<div className="kh-full-row">
-              <button className="btn btn-primary kh-full" onClick=${() => full('start')} disabled=${marks.start == null}><${PlayIcon} playing=${false} size=${18} />歌い始めから</button>
-              <button className="btn kh-full" onClick=${() => full('chorus')} disabled=${marks.chorus == null}><${PlayIcon} playing=${false} size=${18} />サビから</button>
-              <button className="btn btn-ghost kh-full" onClick=${() => full(null)}>続きから</button>
-            </div>
-            <p className="panel-note">歌い始め・サビは、少し手前（前奏の終わり）から流れます。${marks.chorus == null ? 'この譜面ではサビの場所が分からなかったので、サビは歌詞を押して流してください。' : ''}流しながらキーや声を変えても、その場で切りかわります。</p>
-            <button className="kh-apple kh-remove" onClick=${removeOwn}><${Icon} name="trash" size=${15} />使い終わったら: この音源を外す（${own.own.size ? mb(own.own.size) : ''}・元のファイルはそのまま）</button>`
-        : has
-          ? html`<div className="kh-full-row">
-                <button className="btn btn-primary kh-full" onClick=${onUseOwn}><${Icon} name="music" size=${18} />自分の音源で流す</button>
-              </div>
-              <p className="panel-note">いまは YouTube で流しています。YouTube の動画の音はキーを変えられないので（YouTube の決まり）、自分の音源に切りかえると、このキーで流せます。</p>`
-          : html`<div className="kh-full-row">
-                <button className="btn btn-primary kh-full" onClick=${onPickOwn}><${Icon} name="upload" size=${18} />音源ファイルを選ぶ</button>
-              </div>
-              <p className="panel-note">自分で持っている原曲のファイル（買った曲・CD から取り込んだ曲など）を入れると、<b>歌い始めから・サビから</b>を選んで、1曲まるごとこのキーで流せます。広告も入りません。一度入れれば、ほかの端末でもそのまま使えます。</p>`}
-    </div>
-
-    <div className="panel-field">
-      <div className="panel-field-label">30秒だけ聴く<small className="kh-sub">${keyTxt}${has ? '・自分の音源から' : ''}</small></div>
-      <div className="kh-parts" role="group" aria-label="聴くところ">
-        ${PARTS.map((p) => {
-          const at = marks[p.mark];
-          // 自分の音源があれば、その場所から30秒。無ければ Apple の試聴(サビのあたり)だけ
-          const can = has ? at != null : p.mark === 'chorus';
-          return html`<button key=${p.mark} className=${cx('chip kh-part', can && 'is-on')} disabled=${!can || ui.stage === 'load'} onClick=${() => (has ? full(p.mark, { clip: 30 }) : ui.playing ? pv.pause() : playPreview())}>
-            <${PlayIcon} playing=${!has && p.mark === 'chorus' && ui.playing} size=${14} />${p.label}
-          </button>`;
-        })}
-      </div>
-      ${has
-        ? html`<p className="panel-note">押すと、そこの少し手前から30秒、${keyTxt}で流れて止まります（途中で歌詞を押せば、そのまま流れつづけます）。${marks.bridge == null ? 'この譜面では Cメロ の場所が分からなかったので、Cメロは歌詞を押して流してください。' : ''}</p>`
-        : html`<p className="panel-note">いまは Apple の試聴（サビのあたり30秒）だけ聴けます。<b>歌い始め・Cメロ</b>も選ぶには、上の「音源ファイルを選ぶ」で自分の音源を入れてください（試聴の長さと場所は Apple が決めていて、変えられません）。</p>`}
-    </div>
-
-    <div className="panel-field" hidden=${has}>
-      <div className="panel-field-label">Apple の試聴<small className="kh-sub">30秒・サビのあたり</small></div>
+    <div className="panel-field kh-main">
+      <div className="panel-field-label">このキーで原曲を聴く<small className="kh-sub">Apple の試聴・30秒（サビのあたり）</small></div>
       <div className="kh-row">
         <button className=${cx('kh-play', ui.playing && 'is-on')} onClick=${ui.playing ? pv.pause : playPreview} disabled=${ui.stage === 'load'} aria-label=${ui.playing ? '止める' : 'このキーで試聴を流す'}>
           <${PlayIcon} playing=${ui.playing} size=${20} />
@@ -282,7 +238,7 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
                 { value: 'key', label: semis ? `${signed(semis)}（${keyLabel}）` : '声を変えたもの' },
               ]}
             />`
-          : html`<span className="kh-hint">キーを変えると、その高さで流れます</span>`}
+          : html`<span className="kh-hint">上でキーを下げる・上げると、その高さで流れます</span>`}
       </div>
       ${busy ? html`<div className="kh-busy" role="status">${busyText}</div>` : null}
       ${ui.stage === 'ready' || ui.playing
@@ -293,8 +249,37 @@ export function KeyHear({ songId, active, semis, keyLabel, origLabel, getTrack, 
           </div>`
         : null}
       ${ui.err ? html`<p className="kh-err" role="alert">${ui.err}</p>` : null}
-      <p className="panel-note">原曲キーと押し比べられます。</p>
+      <p className="panel-note">流しながらキーを変えると、その場で切りかわります。「原曲」と押し比べもできます。試聴の長さと場所は Apple が決めていて、30秒より長くはできません。</p>
       <button className="kh-apple" onClick=${onApple}><${Icon} name="apple" size=${15} />試聴は Apple Music から（Apple Music でこの曲を開く）</button>
     </div>
+
+    <div className="panel-field">
+      <div className="panel-field-label">声<small className="kh-sub">キーを変えて聴くときの声の感じ</small></div>
+      <${Segmented} size="sm" label="声" value=${voice} onChange=${setVoice} options=${VOICES} />
+      <p className="panel-note">「歌手の声のまま」は、高さだけ変えて声の感じ（響き）は元の歌手のまま。「男性っぽく」「女性っぽく」は響きを低く・高くします。</p>
+    </div>
+
+    <details className="panel-field kh-own" open=${has}>
+      <summary className="panel-field-label">1曲まるごと、${keyTxt}で<small className="kh-sub">自分の音源ファイルがあるとき</small></summary>
+      ${has && mine
+        ? html`<div className="panel-field-sub">聴き方</div>
+            <${Segmented} size="sm" label="聴き方" value=${how} onChange=${setHow} options=${HOW} />
+            <div className="kh-full-row">
+              <button className="btn btn-primary kh-full" onClick=${() => full('top')}><${PlayIcon} playing=${false} size=${18} />頭から</button>
+              <button className="btn kh-full" onClick=${() => full('chorus')} disabled=${marks.chorus == null}><${PlayIcon} playing=${false} size=${18} />サビから</button>
+              <button className="btn btn-ghost kh-full" onClick=${() => full(null)}>続きから</button>
+            </div>
+            <p className="panel-note">${how === 'clip' ? '押したところから30秒流れて止まります（途中で歌詞を押せば、そのまま流れつづけます）。' : '押したところから、曲の最後まで通して流れます。'}${marks.chorus == null ? 'この譜面ではサビの場所が分からなかったので、サビは歌詞を押して流してください。' : ''}</p>
+            <button className="kh-apple kh-remove" onClick=${removeOwn}><${Icon} name="trash" size=${15} />使い終わったら: この音源を外す（${own.own.size ? mb(own.own.size) : ''}・元のファイルはそのまま）</button>`
+        : has
+          ? html`<div className="kh-full-row">
+                <button className="btn btn-primary kh-full" onClick=${onUseOwn}><${Icon} name="music" size=${18} />自分の音源で流す</button>
+              </div>
+              <p className="panel-note">いまは YouTube で流しています。YouTube の動画の音はキーを変えられないので（YouTube の決まり）、自分の音源に切りかえると、このキーで流せます。</p>`
+          : html`<div className="kh-full-row">
+                <button className="btn kh-full" onClick=${onPickOwn}><${Icon} name="upload" size=${18} />音源ファイルを選ぶ</button>
+              </div>
+              <p className="panel-note">自分で持っている原曲のファイル（買った曲・CD から取り込んだ曲など）を入れたときだけ、1曲まるごとこのキーで流せます。Apple Music で聴いている曲は保護されていて使えません。</p>`}
+    </details>
   </div>`;
 }

@@ -14,11 +14,32 @@ export function audioCtx() {
 }
 
 // iPhone の音の扱い(audioSession)を、いまの状況に合わせる。
-// マイクを使っている間は「録音と再生」。ここを「再生だけ」にするとマイクの音が届かなくなる
+// マイクを使っている間は「録音と再生」。ここを「再生だけ」にするとマイクの音が届かなくなる。
+// 鳴らしていないときは 'ambient'(ほかのアプリの音と混ぜる)。'auto' のままだと、譜面を流すための音の時計(AudioContext)を
+// 動かしただけで iPhone が「このページが音を出す」とみなし、流していた Apple Music が止まっていた
+// 自分の音源・試聴・クリックを鳴らす間は 'playback'(マナーモードでも鳴る・画面を消しても、ほかのアプリに移っても流れつづける)
 function applySession() {
   try {
     if (!navigator.audioSession) return;
-    navigator.audioSession.type = capturing ? 'play-and-record' : holders ? 'playback' : 'auto';
+    navigator.audioSession.type = capturing ? 'play-and-record' : holders ? 'playback' : 'ambient';
+  } catch {}
+}
+applySession();
+
+// ロック画面・コントロールセンターに出す曲の情報と ▶/❚❚(画面を消して流しているときに使う)
+export function setNowPlaying(info, { onPlay, onPause } = {}) {
+  const ms = navigator.mediaSession;
+  if (!ms) return;
+  try {
+    if (!info) {
+      ms.playbackState = 'none';
+      for (const a of ['play', 'pause']) ms.setActionHandler(a, null);
+      return;
+    }
+    if (window.MediaMetadata) ms.metadata = new MediaMetadata({ title: info.title || '', artist: info.artist || '', album: 'ひきがたり' });
+    ms.playbackState = info.playing ? 'playing' : 'paused';
+    ms.setActionHandler('play', onPlay || null);
+    ms.setActionHandler('pause', onPause || null);
   } catch {}
 }
 export function beginCapture() {

@@ -338,6 +338,22 @@ const fold = (s) =>
     .toLowerCase()
     .replace(/[\s・,.、。!?'"’“”\-‐―–~〜_()[\]【】「」『』/:;&+*×|｜]/g, '');
 
+// 曲名が「別の曲名の一部」として入っているだけではないか(「愛」が「愛にできることは…」に入っている、など)。
+// 短い曲名(4文字未満)は、前後が文字でない(かっこ・空白・記号・端)ところに出てくるときだけ曲名とみなす
+const WORDCH = /[\p{L}\p{N}]/u;
+function wholeTitle(videoTitle, title, t) {
+  if (t.length >= 4) return true;
+  const v = String(videoTitle || '').normalize('NFKC').toLowerCase();
+  const w = String(title || '').normalize('NFKC').toLowerCase().trim();
+  if (!w) return true;
+  for (let i = v.indexOf(w); i >= 0; i = v.indexOf(w, i + 1)) {
+    const a = v[i - 1];
+    const b = v[i + w.length];
+    if ((!a || !WORDCH.test(a)) && (!b || !WORDCH.test(b))) return true;
+  }
+  return false;
+}
+
 // items: [{ id, title, channel, dur }](YouTube の検索の並び)。durSec: 原曲の長さ(分かれば)
 // exact: 歌詞の時刻が原曲の音源に合わせてあるとき true(長さが同じ=同じ音源の動画を強く優先する)
 export function rankVideos(items, { title, artist, durSec = null, exact = false } = {}) {
@@ -348,7 +364,7 @@ export function rankVideos(items, { title, artist, durSec = null, exact = false 
       const vt = fold(v.title);
       const vc = fold(v.channel).replace(/topic$/, '');
       let s = -idx * 1.5;
-      const hasTitle = !!t && vt.includes(t);
+      const hasTitle = !!t && vt.includes(t) && wholeTitle(v.title, title, t);
       const byArtist = !!a && !!vc && (vc === a || vc.includes(a) || a.includes(vc));
       if (hasTitle) s += 40;
       if (a && (vt.includes(a) || byArtist)) s += 25;

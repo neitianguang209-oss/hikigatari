@@ -4527,20 +4527,36 @@ body:has(.rec-dock) .toast-host {
   margin-top: 8px;
 }
 
-/* 30秒だけ聴く: 歌い始め・サビ・Cメロ */
-.kh-parts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* キーのパネル: いちばん上の「このキーで原曲を聴く」(Apple の試聴)と、下にしまった「1曲まるごと」(自分の音源) */
+.kh-main {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
 }
-.chip.kh-part {
-  height: 40px;
-  padding: 0 16px;
-  gap: 6px;
+.kh-own > summary {
+  cursor: pointer;
+  list-style: none;
 }
-.chip.kh-part:disabled {
-  opacity: 0.4;
-  cursor: default;
+.kh-own > summary::-webkit-details-marker {
+  display: none;
+}
+.kh-own > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.kh-own[open] > summary::before {
+  transform: rotate(90deg);
+}
+.panel-field-sub {
+  margin: 4px 0 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.kh-own .kh-full-row {
+  margin-top: 10px;
 }
 /* 押さえ方のパネル: 指ごとの押さえ方・コツ・もっと押さえやすくするなら */
 .how-press,
@@ -4675,4 +4691,104 @@ body:has(.rec-dock) .toast-host {
 }
 .eased-note .btn {
   margin-left: 6px;
+}
+
+/* 弾き方(ストローク・アルペジオ)の見本: ボタンを押したときだけ譜面の右上に小さく出す */
+.song-body {
+  position: relative;
+}
+.strum-card {
+  position: absolute;
+  z-index: 30;
+  top: 8px;
+  right: 12px;
+  width: min(360px, calc(100% - 24px));
+  padding: 10px 12px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.strum-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.strum-head .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+.strum-next svg {
+  transform: rotate(180deg);
+}
+.strum-title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  line-height: 1.25;
+}
+.strum-title b {
+  display: block;
+  font-size: 0.95rem;
+}
+.strum-title small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.strum-steps {
+  display: grid;
+  grid-template-columns: repeat(var(--n), 1fr);
+  gap: 3px;
+  margin: 10px 0 6px;
+}
+.strum-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0 3px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  transition: background 0.06s;
+}
+.strum-mark {
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--chord);
+}
+.strum-steps.is-arp .strum-mark {
+  font-size: 1.1rem;
+  font-family: var(--chord-font);
+}
+.strum-step.is-rest .strum-mark {
+  color: var(--muted);
+  font-weight: 400;
+}
+.strum-step.is-mute .strum-mark {
+  font-size: 1.05rem;
+  color: var(--muted);
+}
+.strum-step.is-now {
+  background: var(--accent-soft);
+}
+.strum-count {
+  min-height: 1em;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.strum-note {
+  margin: 4px 0 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.strum-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.yt-confirm {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
 }

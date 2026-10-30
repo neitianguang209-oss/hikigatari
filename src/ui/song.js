@@ -16,6 +16,7 @@ import { detectTempo, decodeAudio, toMonoHQ } from '../music/earcopy.js';
 import { sheetFromFetched } from '../music/sources.js';
 import { krcToSynced, krcCandidates } from '../lib/lyrics.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
+import { StrumCard } from './strum.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
 import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
@@ -147,6 +148,7 @@ function SongReady({ song, reload }) {
   const [prefs] = usePrefs();
   const scrollRef = useRef(null);
   const [panel, setPanel] = useState(null); // capo | key | tempo | text | more | chord
+  const [strumOpen, setStrumOpen] = useState(false); // 弾き方(ストローク・アルペジオ)の見本を出している
   const [chordTap, setChordTap] = useState(null);
 
   const st = song.settings || {};
@@ -579,16 +581,17 @@ function SongReady({ song, reload }) {
     }
   };
   // キーのパネルから: 自分の音源を、このキーで流す(パネルを閉じて、いまの場所から)
-  // from: 'start'(歌い始め) | 'chorus'(サビの頭) | 'bridge'(Cメロ) | null(止めたところから)。2秒手前から(前の部分の終わりから入れるように)
-  // clip: その秒数だけ流して止める(30秒だけ聴く)
+  // from: 'top'(曲の頭から通して) | 'chorus'(サビの頭。2秒手前から) | null(止めたところから)
+  // clip: その秒数だけ流して止める(聴き方「30秒だけ」)
   const clipTimer = useRef(0);
   const playOwnFull = (from = null, { clip = 0 } = {}) => {
     audioCtx(); // iPhone は押した瞬間に音の出口を開ける
     setPanel(null);
     clearTimeout(clipTimer.current);
-    const line = from === 'start' ? marks.start : from === 'chorus' ? marks.chorus : from === 'bridge' ? marks.bridge : null;
+    const line = from === 'chorus' ? marks.chorus : null;
     const go = () => {
-      if (line != null) playLineFrom(line);
+      if (from === 'top') scroll.playFrom({ beat: 0, time: 0 });
+      else if (line != null) playLineFrom(line);
       else if (!scroll.playing) scroll.start();
       if (clip) clipTimer.current = setTimeout(() => scroll.stop(), ((clip + 2) / (music.dock.speed || 1)) * 1000);
     };
@@ -1054,6 +1057,7 @@ function SongReady({ song, reload }) {
           </button>`
         : null}
       <button className=${cx('chip', inline && 'is-on')} aria-pressed=${inline} onClick=${() => setSt({ [inlineKey]: !inline })}>図</button>
+      <button className=${cx('chip', strumOpen && 'is-on')} aria-pressed=${strumOpen} onClick=${() => setStrumOpen(!strumOpen)} aria-label="弾き方（ストローク・アルペジオ）の見本">弾き方</button>
       <button className=${cx('chip', transpose !== 0 && 'is-on')} onClick=${() => setPanel('key')}>
         <span className="lbl-long">キー ${transpose === 0 ? '原曲' : signed(transpose)}</span>
         <span className="lbl-short">${transpose === 0 ? 'キー' : `キー ${signed(transpose)}`}</span>
@@ -1067,6 +1071,17 @@ function SongReady({ song, reload }) {
     </div>
 
     <div className="song-body">
+      ${strumOpen
+        ? html`<${StrumCard}
+            key=${instrument + beatsPerBar}
+            instrument=${instrument}
+            beatsPerBar=${beatsPerBar}
+            bpm=${bpm}
+            chosen=${st.strum?.[instrument] || null}
+            onChoose=${(id) => setSt({ strum: { ...(st.strum || {}), [instrument]: id } })}
+            onClose=${() => setStrumOpen(false)}
+          />`
+        : null}
       <main
         className="sheet-scroll"
         ref=${scrollRef}
@@ -1205,6 +1220,8 @@ function SongReady({ song, reload }) {
       marks=${marks}
       voice=${prefs.voice || 'orig'}
       setVoice=${(v) => setPrefs({ voice: v })}
+      how=${prefs.ownHow || 'full'}
+      setHow=${(v) => setPrefs({ ownHow: v })}
       onPickOwn=${() => { setPanel(null); pickOwn(); }}
       onUseOwn=${() => playOwnFull(null)}
       onPlayFull=${playOwnFull}
@@ -1842,7 +1859,7 @@ export function songMarks(lines) {
   return { start: start >= 0 ? start : null, chorus: chorus >= 0 ? chorus : null, bridge: bridge >= 0 ? bridge : null, sure };
 }
 
-function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, marks, voice, setVoice, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
+function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, marks, voice, setVoice, how, setHow, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
   return html`<${Sheet} open=${open} onClose=${onClose} title="キー（曲の高さ）">
     <p className="panel-lead">自分の声に合わせて曲全体の高さを変えます。${instrument === 'guitar' ? 'ギターのカポ位置も自動で選び直します。' : ''}</p>
     <div className="key-big">
@@ -1866,6 +1883,8 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, 
       marks=${marks}
       voice=${voice}
       setVoice=${setVoice}
+      how=${how}
+      setHow=${setHow}
       onPickOwn=${onPickOwn}
       onUseOwn=${onUseOwn}
       onPlayFull=${onPlayFull}

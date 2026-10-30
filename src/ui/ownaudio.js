@@ -9,7 +9,7 @@ import { api, deviceKey } from '../lib/api.js';
 import { lib, media } from '../lib/store.js';
 import { AUDIO_FN_URL } from '../config.js';
 import { markUsed } from '../lib/mediastore.js';
-import { audioCtx, holdPlayback, releasePlayback } from '../lib/sound.js';
+import { audioCtx, holdPlayback, releasePlayback, setNowPlaying } from '../lib/sound.js';
 import { decodeAudio } from '../music/earcopy.js';
 import { aacFromMp4 } from '../music/voice.js';
 import { shifterLatency, VOICE_FORMANT } from '../music/keyshift.js';
@@ -250,10 +250,22 @@ export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
     const el = r.ctx.currentTime - r.t0 - lag();
     return el <= 0 ? r.off : Math.min(dur(), r.off + el * r.rate);
   };
+  // 流している間は「再生アプリ」扱い(画面を消しても・ほかのアプリに移っても流れつづける)＋ロック画面に ▶/❚❚
   const hold = (on) => {
     if (on && !r.held) holdPlayback();
     if (!on && r.held) releasePlayback();
     r.held = on;
+    if (r.name || on)
+      setNowPlaying(
+        { title: r.name, artist: r.artist || '', playing: on },
+        {
+          onPlay: () => api.current.play(),
+          onPause: () => {
+            api.current.pause();
+            cb.current?.(); // 譜面も止める
+          },
+        },
+      );
   };
   const stopSrc = () => {
     const s = r.src;
@@ -342,6 +354,15 @@ export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
     };
   }
 
+  // 裏から戻ってきたとき、iPhone が音の部品を止めていたら(電話・ほかのアプリの音など)動かし直す
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && r.playing && r.ctx && r.ctx.state !== 'running') r.ctx.resume().catch?.(() => {});
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
   // キー・声が変わったら、流したままその場で変える
   useEffect(() => {
     r.semis = semis;
@@ -384,6 +405,7 @@ export function useOwnPlayer(rec, { semis = 0, voice = 'orig', onEnd } = {}) {
       stopSrc();
       r.playing = false;
       hold(false);
+      setNowPlaying(null);
       try {
         r.node?.disconnect();
         r.gain?.disconnect();

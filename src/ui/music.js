@@ -228,6 +228,93 @@ export function useYouTube(videoId, on = {}) {
   return { setHost, ui, api: api.current };
 }
 
+// ---------------------------------------------------------------- Chrome で YouTube を流す
+
+// アプリの中に動画を置かず、Chrome の YouTube(本物の動画ページ)で流す。歌詞を押すたびに、その時刻から Chrome で開き直す。
+// ・パソコン: Chrome の小さい窓(いつも同じ窓)を開いて、そこで流す。止めると窓を閉じる
+// ・iPhone・iPad: Chrome アプリで開く(googlechromes://)。アプリからは Chrome の動画を止められないので、止めるのは Chrome の側で
+// Chrome の中の再生位置は読めないので、開いた時刻からこちらで数える(開いてから音が出るまでの待ち LAG を引く。ずれは「早く/遅く」で)
+const CHROME_WIN = 'hikigatari-yt';
+const LAG = IOS ? 2.5 : 2.0;
+export function useChromePlayer(video, on = {}) {
+  const [ui, setUi] = useState({ ready: false, state: -1, blocked: false, error: null });
+  const cb = useRef(on);
+  cb.current = on;
+  const r = useRef({ playing: false, base: 0, at: 0, win: null, dur: 0 }).current;
+  r.dur = video?.dur || 0;
+  r.video = video;
+  const elapsed = () => Math.max(0, (Date.now() - r.at) / 1000 - LAG);
+  const open = (t) => {
+    const url = `https://www.youtube.com/watch?v=${r.video.id}${t >= 1 ? `&t=${Math.floor(t)}s` : ''}`;
+    // 秒より細かい位置は指定できないので、切り捨てたぶんを基準にする
+    r.base = t >= 1 ? Math.floor(t) : 0;
+    r.at = Date.now();
+    if (IOS) {
+      openInChrome(url);
+      return;
+    }
+    const w = Math.min(560, screen.availWidth || 560);
+    r.win = window.open(url, CHROME_WIN, `popup,width=${w},height=${Math.round((w * 9) / 16) + 80},left=${Math.max(0, (screen.availWidth || w) - w)},top=0`);
+    if (!r.win) toast('Chrome の窓を開けませんでした（ポップアップを許可してください）', { kind: 'error', ms: 5000 });
+  };
+  const api = useRef(null);
+  if (!api.current) {
+    api.current = {
+      time: () => (r.playing ? r.base + elapsed() : r.base),
+      seek(t) {
+        t = Math.max(0, t);
+        if (r.playing) open(t);
+        else r.base = t;
+      },
+      play() {
+        if (r.playing) return;
+        r.playing = true;
+        open(r.base);
+        setUi((u) => ({ ...u, state: 1 }));
+      },
+      pause() {
+        if (!r.playing) return;
+        r.base = r.base + elapsed();
+        r.playing = false;
+        try {
+          r.win?.close();
+        } catch {}
+        r.win = null;
+        setUi((u) => ({ ...u, state: 2 }));
+      },
+      ended: () => !!r.dur && r.base + (r.playing ? elapsed() : 0) >= r.dur - 0.5,
+      duration: () => r.dur,
+      title: () => r.video?.title || '',
+      setRate() {},
+    };
+  }
+  // パソコン: Chrome の窓を閉じたら、譜面も止める
+  useEffect(() => {
+    if (IOS) return;
+    const id = setInterval(() => {
+      if (r.playing && r.win && r.win.closed) {
+        r.win = null;
+        api.current.pause();
+        cb.current.onPause?.();
+      }
+    }, 700);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    setUi({ ready: !!video, state: video ? 5 : -1, blocked: false, error: null });
+    Object.assign(r, { playing: false, base: 0 });
+  }, [video?.id]);
+  useEffect(
+    () => () => {
+      try {
+        r.win?.close();
+      } catch {}
+    },
+    [],
+  );
+  return { ui, api: api.current };
+}
+
 // ---------------------------------------------------------------- 譜面の行と曲の時刻を結びつける
 
 // 戻り値: { base: 'yt' | 'album', vid, src, lines, hit, act: 原曲で歌っている区間(自分の歌の録音を合わせるときの見本) } か { none: true, soft: 通信できなかった }
@@ -310,9 +397,13 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   // 自分の音源があれば、それを流す(YouTube にしたいときは settings.musicSrc = 'yt')
   const mine = !!own?.own && st.musicSrc !== 'yt';
   const video = !mine && st.yt?.id ? st.yt : null;
+  // YouTube をどこで流すか: 'chrome'(Chrome の YouTube で。標準) | 'app'(アプリの中の小さい動画で)
+  const [where, setWhereState] = useState(() => getPrefs().ytWhere || 'chrome');
+  const viaChrome = !mine && where === 'chrome';
   // 動画(音源)ごとの合わせ込み: pts = 「譜面の時刻 t のところは、動画では off 秒ずれている」の目印(歌に合わせるで作る)。
   // 1か所なら全体を同じだけずらし、何か所かあれば、あいだはなめらかにつなぐ(前奏や間奏の長さが違う動画・テンポの揺れる曲でも合う)
-  const fixKey = mine ? 'own:' + own.own.fp : video?.id || null;
+  // Chrome で流すときは、開いてから音が出るまでの待ちが入るので、アプリの中の動画とは別に覚える
+  const fixKey = mine ? 'own:' + own.own.fp : video ? (viaChrome ? 'cr:' : '') + video.id : null;
   const fix = (fixKey && st.ytFix?.[fixKey]) || null;
   const pts = fix?.pts || [];
   const offAt = (t) => {
@@ -336,7 +427,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
   const bad = useRef(new Set()); // この端末で流せなかった動画
   const live = useRef({});
 
-  const yt = useYouTube(on && !mine ? video?.id : null, {
+  const yt = useYouTube(on && !mine && !viaChrome ? video?.id : null, {
     onPlay: () => {
       const s = scrollApi.current;
       if (s && !s.isPlaying()) s.start();
@@ -365,7 +456,14 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
 
   // 自分の音源(流し終わったら譜面も止める)
   const mp = useOwnPlayer(on && mine ? own.rec : null, { semis, voice, onEnd: () => scrollApi.current?.stop() });
-  const player = mine ? mp : yt;
+  // Chrome の YouTube(パソコンは Chrome の窓を閉じたら譜面も止める)
+  const cp = useChromePlayer(on && viaChrome ? video : null, {
+    onPause: () => {
+      const s = scrollApi.current;
+      if (s?.isPlaying()) s.stop();
+    },
+  });
+  const player = mine ? mp : viaChrome ? cp : yt;
 
   // 譜面の行 ↔ 曲の時刻。作ったものは手元に置いておき、譜面が変わったら作り直す。
   // 自分の音源は原曲(アルバム)の音なので、時刻つき歌詞(原曲の時刻)を先に探す
@@ -406,7 +504,13 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     try {
       const tm = live.current.timing;
       let pick = null;
-      if (tm?.vid && tm.vid !== skip && !bad.current.has(tm.vid)) pick = { id: tm.vid, title: song.title, channel: '', dur: 0 };
+      if (tm?.vid && tm.vid !== skip && !bad.current.has(tm.vid)) {
+        // コード進行メモ倉庫の動画も、検索の候補にあれば本当の題名・チャンネルを使う(確かめてもらうときに出す)
+        let all = live.current.cands;
+        if (!all) all = await loadCands(tm).catch(() => null);
+        const hit = all?.find((v) => v.id === tm.vid && v.channel);
+        pick = hit || { id: tm.vid, title: song.title, channel: '', dur: 0 };
+      }
       else {
         const all = live.current.cands || (await loadCands(tm));
         pick = all.find((v) => v.id !== skip && !bad.current.has(v.id) && (v.timed || v.score > 0)) || null;
@@ -431,7 +535,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
 
   // リンクで選んだ動画などは、流れ始めてから長さと題名が分かる
   useEffect(() => {
-    if (!on || !video || yt.ui.state !== 1) return;
+    if (!on || !video || viaChrome || yt.ui.state !== 1) return;
     const d = Math.round(yt.api.duration());
     const title = yt.api.title();
     const patch = {};
@@ -546,6 +650,15 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     setErr(null);
     setSt({ yt: { id: v.id, title: v.title || '', channel: v.channel || '', dur: v.dur || 0, by } });
   };
+  // 自動で選んだ動画を「これで合っている」にする
+  const okVideo = () => video && setSt({ yt: { ...video, ok: true } });
+  const setWhere = (w) => {
+    if (w === where) return;
+    scrollApi.current?.stop();
+    setSyncing(false);
+    setWhereState(w);
+    setPrefs({ ytWhere: w });
+  };
   const pickUrl = (text) => {
     const id = parseYouTubeId(text);
     if (!id) {
@@ -556,6 +669,10 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     return true;
   };
   const setSpeed = (v) => {
+    if (viaChrome && v !== 1) {
+      toast('Chrome で流しているときは、速さは YouTube の側（⚙ → 再生速度）で変えてください');
+      return;
+    }
     setSpeedState(v);
     player.api.setRate(v);
   };
@@ -606,14 +723,16 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
     ? { kind: 'busy', text: '原曲の動画を探しています…' }
     : err && !mine
       ? { kind: 'error', text: err, action: 'pick' }
-      : !mine && yt.ui.error === 'load'
+      : !mine && !viaChrome && yt.ui.error === 'load'
         ? { kind: 'error', text: 'YouTube を読み込めませんでした。通信を確かめてください' }
         : !ready
           ? { kind: 'busy', text: '歌詞の時刻を調べています…' }
           : syncing
             ? { kind: 'sync', text: timing?.lines ? '曲を流しながら、いま歌っている歌詞をタップ（その場所に合わせます）' : '曲を流しながら、歌い出した行をタップ（何か所か押すと、その時刻を覚えます）', action: 'syncEnd' }
-            : !mine && yt.ui.blocked
+            : !mine && !viaChrome && yt.ui.blocked
               ? { kind: 'warn', text: '動画が始まらないときは、動画の ▶ を押してください（iPhone・iPad は最初の1回だけ必要です）' }
+              : !mine && video?.by === 'auto' && !video.ok
+                ? { kind: 'tip', text: `流す動画:「${video.title || song.title}」${video.channel ? `（${video.channel}）` : ''}`, action: 'confirm' }
               : !timing
                 ? { kind: 'busy', text: '歌詞の時刻を調べています…' }
                 : timing.none && !anchors.length
@@ -621,7 +740,7 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
                   : mismatch
                     ? { kind: 'warn', text: `${mine ? '音源' : '動画'}と譜面がずれるときは「合わせる」を押して、いま歌っている歌詞をタップしてください`, action: 'sync' }
                     : tip
-                      ? { kind: 'tip', text: mine ? `歌詞やコードを押すと、そこから自分の音源が流れます${semis ? `（キー ${signed(semis)} の高さで）` : ''}` : '歌詞やコードを押すと、そこから曲が流れます' }
+                      ? { kind: 'tip', text: mine ? `歌詞やコードを押すと、そこから自分の音源が流れます${semis ? `（キー ${signed(semis)} の高さで）` : ''}` : viaChrome ? (IOS ? '歌詞やコードを押すと、Chrome の YouTube でそこから流れます（流れたら、このアプリに戻ってください）' : '歌詞やコードを押すと、Chrome の小さい窓の YouTube でそこから流れます') : '歌詞やコードを押すと、そこから曲が流れます' }
                       : null;
 
   return {
@@ -637,6 +756,8 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
       yt,
       player,
       mine,
+      viaChrome,
+      onOk: okVideo,
       ownName: mine ? own.own.name : '',
       semis,
       video,
@@ -670,13 +791,15 @@ export function useSongMusic({ song, st, setSt, lines, bpm, totalBeats, scrollAp
       setMode,
       src: timing?.lines ? timing.src : null,
       toChrome,
+      where,
+      setWhere,
     },
   };
 }
 
 // ---------------------------------------------------------------- 動画の窓と、再生位置のつまみ
 
-export function MusicDock({ yt, player, mine, semis, video, mode, setMode, speed, setSpeed, status, onSync, onSyncEnd, onPanel, onPickOwn, onRetryOwn, onKey, toChrome }) {
+export function MusicDock({ yt, player, mine, viaChrome, onOk, semis, video, mode, setMode, speed, setSpeed, status, onSync, onSyncEnd, onPanel, onPickOwn, onRetryOwn, onKey, toChrome }) {
   const [time, setTime] = useState({ t: 0, d: 0 });
   useEffect(() => {
     const id = setInterval(() => setTime({ t: player.api.time(), d: player.api.duration() || video?.dur || 0 }), 250);
@@ -689,6 +812,8 @@ export function MusicDock({ yt, player, mine, semis, video, mode, setMode, speed
       ? html`<button className="btn btn-sm btn-primary" onClick=${onSync}>合わせる</button>`
       : status?.action === 'syncEnd'
         ? html`<button className="btn btn-sm" onClick=${onSyncEnd}>おわる</button>`
+        : status?.action === 'confirm'
+          ? html`<span className="yt-confirm"><button className="btn btn-sm btn-primary" onClick=${onOk}>これでOK</button><button className="btn btn-sm" onClick=${onPanel}>ちがう</button></span>`
         : status?.action === 'pick'
           ? html`<button className="btn btn-sm btn-primary" onClick=${onPanel}>動画を選ぶ</button>`
           : status?.action === 'own'
@@ -697,7 +822,7 @@ export function MusicDock({ yt, player, mine, semis, video, mode, setMode, speed
               ? html`<button className="btn btn-sm btn-primary" onClick=${onRetryOwn}>もう一度</button>`
               : null;
   return html`<${React.Fragment}>
-    ${mine
+    ${mine || viaChrome
       ? null
       : html`<div className=${cx('yt-video', 'is-' + mode, !video && 'is-empty')}>
           <div className="yt-frame" ref=${yt.setHost}></div>
@@ -713,14 +838,15 @@ export function MusicDock({ yt, player, mine, semis, video, mode, setMode, speed
       ${status ? html`<div className=${cx('yt-status', 'is-' + status.kind)} role="status"><span>${status.text}</span>${act}</div>` : null}
       <div className="rec-row">
         ${mine ? html`<span className="own-badge" title="自分の音源（広告なし）" aria-label="自分の音源で流しています"><${Icon} name="music" size=${15} /></span>` : null}
+        ${viaChrome ? html`<span className="own-badge" title="Chrome の YouTube で流しています" aria-label="Chrome の YouTube で流しています"><${Icon} name="video" size=${15} /></span>` : null}
         <span className="rec-time">${mmss(time.t)}</span>
         <input type="range" className="rec-seek" min="0" max=${time.d || 0} step="0.5" value=${Math.min(time.t, time.d || 0)} disabled=${!can} onInput=${(e) => player.api.seek(Number(e.target.value))} aria-label="曲の再生位置" />
         <span className="rec-time">${mmss(time.d)}</span>
         ${mine && semis
           ? html`<button className="chip chip-sm rec-speed is-on" onClick=${onKey} aria-label=${`キー ${signed(semis)} の高さで流しています（押すとキーを変える）`}>${signed(semis)}</button>`
           : null}
-        <button className=${cx('chip chip-sm rec-speed', speed !== 1 && 'is-on')} onClick=${cycle} disabled=${!can} aria-label="曲の速さ">${speed === 1 ? '1×' : speed + '×'}</button>
-        ${!mine && video && mode === 'hidden'
+        <button className=${cx('chip chip-sm rec-speed', speed !== 1 && 'is-on')} onClick=${cycle} disabled=${!can} hidden=${viaChrome} aria-label="曲の速さ">${speed === 1 ? '1×' : speed + '×'}</button>
+        ${!mine && !viaChrome && video && mode === 'hidden'
           ? html`<button className="icon-btn rec-mini" onClick=${() => setMode('small')} aria-label="動画を出す"><${Icon} name="video" size=${18} /></button>`
           : null}
       </div>
@@ -741,7 +867,7 @@ function ownWhere(own) {
   return 'この端末だけ';
 }
 
-export function MusicPanel({ open, onClose, video, mine, own, setSource, onPickOwn, cands, loadCands, pick, pickUrl, pts, nudge, hasTiming, anchors, resetFix, onSync, speed, setSpeed, mode, setMode, src, onOff, onApple, toChrome }) {
+export function MusicPanel({ open, onClose, video, mine, own, setSource, onPickOwn, cands, loadCands, pick, pickUrl, pts, nudge, hasTiming, anchors, resetFix, onSync, speed, setSpeed, mode, setMode, src, onOff, onApple, toChrome, where, setWhere }) {
   const [url, setUrl] = useState('');
   useEffect(() => {
     if (open && !mine) loadCands();
@@ -756,7 +882,7 @@ export function MusicPanel({ open, onClose, video, mine, own, setSource, onPickO
     own.remove();
   };
   return html`<${Sheet} open=${open} onClose=${onClose} title="曲と合わせる">
-    <p className="panel-lead">原曲をアプリの中で流します。<b>歌詞やコードを押すと、そこから曲が流れ</b>、譜面もいっしょに進みます。コードの押さえ方は、コードを<b>長押し</b>で見られます。</p>
+    <p className="panel-lead">原曲を流しながら弾きます。<b>歌詞やコードを押すと、そこから曲が流れ</b>、譜面もいっしょに進みます。コードの押さえ方は、コードを<b>長押し</b>で見られます。</p>
 
     <div className="panel-field">
       <div className="panel-field-label">流す音</div>
@@ -814,14 +940,27 @@ export function MusicPanel({ open, onClose, video, mine, own, setSource, onPickO
       </p>
     </div>
 
-    <div className="panel-field">
-      <div className="panel-field-label">曲の速さ（音程はそのまま）</div>
-      <${Segmented} label="曲の速さ" value=${speed} onChange=${setSpeed} options=${RATES.map((v) => ({ value: v, label: v === 1 ? 'そのまま' : `${v}×` }))} />
-    </div>
+    ${mine
+      ? null
+      : html`<div className="panel-field">
+          <div className="panel-field-label">YouTube を流す場所</div>
+          <${Segmented} label="YouTube を流す場所" value=${where} onChange=${setWhere} options=${[{ value: 'chrome', label: 'Chrome で' }, { value: 'app', label: 'アプリの中で' }]} />
+          <p className="panel-note">${where === 'chrome'
+            ? IOS
+              ? 'Chrome アプリの YouTube で流します。歌詞を押すたびに、その時刻から Chrome で開き直します（流れ始めたら、このアプリに戻ってください）。止めるのは Chrome の側で。Chrome が後ろに回ると YouTube が止まる場合は、iPad の画面分割で横に並べると流れつづけます。'
+              : 'Chrome の小さい窓の YouTube で流します。歌詞を押すたびに、その時刻から開き直します。■ で止めると窓も閉じます。開いてから音が出るまでの待ちは見込んでいますが、ずれたら下の「早く」「遅く」で。'
+            : 'アプリの中の小さい動画で流します。'}</p>
+        </div>`}
+    ${mine || where !== 'chrome'
+      ? html`<div className="panel-field">
+          <div className="panel-field-label">曲の速さ（音程はそのまま）</div>
+          <${Segmented} label="曲の速さ" value=${speed} onChange=${setSpeed} options=${RATES.map((v) => ({ value: v, label: v === 1 ? 'そのまま' : `${v}×` }))} />
+        </div>`
+      : null}
     ${mine
       ? null
       : html`<${React.Fragment}>
-          <div className="panel-field">
+          <div className="panel-field" hidden=${where === 'chrome'}>
             <div className="panel-field-label">動画の窓</div>
             <${Segmented} label="動画の窓" value=${mode} onChange=${setMode} options=${[{ value: 'small', label: '小さく' }, { value: 'big', label: '大きく' }, { value: 'hidden', label: 'しまう（音だけ）' }]} />
           </div>
