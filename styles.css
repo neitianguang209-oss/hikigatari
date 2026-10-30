@@ -4792,3 +4792,401 @@ body:has(.rec-dock) .toast-host {
   gap: 6px;
   flex: none;
 }
+
+/* ---------------------------------------------------------------- チューナー(定番のギターチューナーのアプリにならった形)
+   上: チューニングと基準の A / モード / 横の目盛りの上を動く音名の丸と、音の高さの流れ / 下: ヘッドと糸巻き */
+.tn-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tn-tuning {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  text-align: left;
+}
+.tn-tuning span {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+}
+.tn-tuning b {
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+.tn-tuning small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tn-tuning .icon {
+  flex: none;
+  transform: rotate(90deg);
+  color: var(--muted);
+}
+.tn-a4 {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  flex: none;
+}
+.tn-a4 button {
+  width: 32px;
+  height: 38px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.tn-a4 span {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.tn-tunings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.tn-tuning-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: left;
+}
+.tn-tuning-item small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+.tn-tuning-item.is-on {
+  border-color: var(--good);
+  box-shadow: inset 0 0 0 1px var(--good);
+}
+.tn-modes {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin: 12px auto 4px;
+  padding: 3px;
+  width: fit-content;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.tn-mode {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.tn-mode.is-on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+/* 目盛り: 真ん中の緑の帯に丸が入ればぴったり */
+.tn-meter {
+  max-width: 420px;
+  margin: 14px auto 0;
+  padding: 0 26px;
+}
+.tn-scale {
+  position: relative;
+  height: 62px;
+}
+.tn-scale::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background: var(--surface-3);
+}
+.tn-zone {
+  position: absolute;
+  left: 46%;
+  width: 8%;
+  top: 8px;
+  bottom: 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--good) 22%, transparent);
+}
+.tn-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 10px;
+  margin: -5px 0 0 -1px;
+  border-radius: 1px;
+  background: var(--muted);
+  opacity: 0.55;
+}
+.tn-tick.is-big {
+  height: 18px;
+  margin-top: -9px;
+}
+.tn-tick.is-zero {
+  height: 46px;
+  margin-top: -23px;
+  background: var(--good);
+  opacity: 0.8;
+}
+.tn-bubble {
+  position: absolute;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--muted);
+  transition: left 0.09s linear, background 0.15s, transform 0.15s;
+  box-shadow: var(--shadow);
+}
+.tn-bubble b {
+  font-family: var(--chord-font);
+  font-size: 1.45rem;
+  line-height: 1;
+}
+.tuner.is-live .tn-bubble {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.tuner.is-ok .tn-bubble {
+  background: var(--good);
+  color: #fff;
+  transform: scale(1.1);
+}
+.tn-scale-labels {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 -18px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+/* 音の高さの流れ: 上が今、下へ流れていく */
+.tn-trace {
+  display: block;
+  width: 100%;
+  height: 54px;
+  margin-top: 4px;
+  overflow: visible;
+}
+.tn-trace-mid {
+  stroke: color-mix(in srgb, var(--good) 45%, transparent);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+.tn-trace-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  opacity: 0.75;
+}
+.tuner.is-ok .tn-trace-line {
+  stroke: var(--good);
+}
+
+.tn-readout {
+  text-align: center;
+  margin-top: 4px;
+}
+.tn-cents {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.tn-cents b {
+  font-size: 1.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.tn-cents.is-near b {
+  color: var(--accent);
+}
+.tn-cents.is-far b {
+  color: var(--danger);
+}
+.tuner.is-ok .tn-cents b {
+  color: var(--good);
+}
+.tn-sub {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.tn-turn {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+/* ヘッドと糸巻き */
+.tn-head {
+  display: grid;
+  grid-template-columns: 1fr minmax(140px, 220px) 1fr;
+  align-items: start;
+  gap: 4px;
+  max-width: 440px;
+  margin: 4px auto 0;
+}
+.tn-head-art {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.tn-wood {
+  fill: #6b4a33;
+}
+:root[data-theme='dark'] .tn-wood {
+  fill: #4a3426;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .tn-wood {
+    fill: #4a3426;
+  }
+}
+.tn-nut {
+  fill: #efe7da;
+}
+.tn-neck {
+  fill: #3a2a1f;
+}
+.tn-str line {
+  stroke: #cfc6b8;
+  opacity: 0.8;
+}
+.tn-str .tn-post {
+  fill: #d9d2c5;
+  stroke: #8d8475;
+  stroke-width: 1;
+}
+.tn-str.is-done line {
+  stroke: var(--good);
+}
+.tn-str.is-hit line {
+  stroke: var(--accent);
+  opacity: 1;
+}
+.tn-str.is-hit.is-ok line {
+  stroke: var(--good);
+}
+.tn-pegs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+.tn-pegs:first-child {
+  align-items: flex-end;
+}
+.tn-peg {
+  width: 56px;
+  height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
+}
+.tn-peg b {
+  font-family: var(--chord-font);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.tn-peg small {
+  margin-top: 2px;
+  font-size: 0.66rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.tn-peg.is-target {
+  border-color: var(--accent);
+}
+.tn-peg.is-hit {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: scale(1.08);
+}
+.tn-peg.is-done {
+  border-color: var(--good);
+}
+.tn-peg.is-done small {
+  color: var(--good);
+  font-weight: 700;
+}
+.tn-peg.is-hit.is-ok,
+.tn-peg.is-done.is-hit {
+  background: var(--good);
+  border-color: var(--good);
+  color: #fff;
+}
+.tn-peg.is-hit.is-ok small,
+.tn-peg.is-done.is-hit small {
+  color: #fff;
+}
+.tn-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 10px;
+}
+.tn-bottom .tuner-level {
+  margin: 0;
+  width: 160px;
+}
+.tn-bottom .tuner-progress {
+  margin: 0;
+}
+.tn-mode,
+.tn-a4 button,
+.tn-tuning,
+.tn-tuning-item,
+.tn-peg {
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.tn-mode,
+.tn-a4 button {
+  border: 0;
+  background: none;
+}
+.tn-mode {
+  color: var(--muted);
+}
+.tn-mode.is-on {
+  color: var(--text);
+}
