@@ -4,7 +4,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import htm from 'htm';
 import { Icon, PlayIcon } from './icons.js';
-import { audioCtx, click } from '../lib/sound.js';
+import { audioCtx, click, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { cx } from '../lib/util.js';
 const html = htm.bind(React.createElement);
 
@@ -71,19 +71,27 @@ function counts(n, m) {
 
 const ARROW = { D: '↓', U: '↑', X: '✕' };
 
-// その曲のテンポで、2小節くり返して鳴らす(ほかのアプリの音は止めない)
+// その曲のテンポで、くり返して鳴らす(鳴らす間だけ「再生アプリ」扱い。iPhone のマナーモードでも聞こえる)
 function usePatternSound(p, bpm, m) {
   const [on, setOn] = useState(false);
   const [at, setAt] = useState(-1);
-  const r = useRef({ timer: 0, next: 0, k: 0, ui: [] }).current;
+  const r = useRef({ timer: 0, next: 0, k: 0, ui: [], held: false }).current;
   const stop = () => {
     clearInterval(r.timer);
+    if (r.held) {
+      r.held = false;
+      releasePlayback();
+    }
     r.ui.forEach(clearTimeout);
     r.ui = [];
     setOn(false);
     setAt(-1);
   };
   const start = () => {
+    if (!r.held) {
+      r.held = true;
+      holdPlayback();
+    }
     const c = audioCtx();
     const n = p.steps.length;
     const barSec = (60 / bpm) * (m === 6 ? 3 : m); // 6/8 は 付点4分を1拍として2拍(=8分6つ)… ここでは8分=BPM の半分の長さで数える

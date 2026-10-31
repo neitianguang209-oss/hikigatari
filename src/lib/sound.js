@@ -99,6 +99,20 @@ export function releasePlayback() {
   } catch {}
 }
 
+// アプリの中の <audio>・<video>(試聴・耳コピ・自分の録音など)も、流れている間は「再生アプリ」扱いにする。
+// これが無いと、鳴らしていないときの 'ambient' のままになり、iPhone のマナーモードでは音が出ない
+const playingMedia = new Set();
+function onMedia(e) {
+  const el = e.target;
+  if (!(el instanceof HTMLMediaElement) || el === keepAlive) return;
+  if (e.type === 'play') {
+    if (playingMedia.has(el)) return;
+    playingMedia.add(el);
+    holdPlayback();
+  } else if (playingMedia.delete(el)) releasePlayback();
+}
+for (const t of ['play', 'pause', 'ended', 'emptied']) document.addEventListener(t, onMedia, true);
+
 // メトロノームのクリック(木をたたいたような「カッ」)。when は audioCtx の時刻(0 = すぐ)
 export function click(accent = false, when = 0, volume = 1) {
   try {
