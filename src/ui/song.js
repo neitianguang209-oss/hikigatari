@@ -1077,6 +1077,8 @@ function SongReady({ song, reload }) {
             instrument=${instrument}
             beatsPerBar=${beatsPerBar}
             bpm=${bpm}
+            title=${song.title}
+            artist=${song.artist || ''}
             chosen=${st.strum?.[instrument] || null}
             onChoose=${(id) => setSt({ strum: { ...(st.strum || {}), [instrument]: id } })}
             onClose=${() => setStrumOpen(false)}

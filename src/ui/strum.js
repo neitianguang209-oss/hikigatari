@@ -6,6 +6,8 @@ import htm from 'htm';
 import { Icon, PlayIcon } from './icons.js';
 import { audioCtx, click, holdPlayback, releasePlayback } from '../lib/sound.js';
 import { cx } from '../lib/util.js';
+import { api } from '../lib/api.js';
+import { YT_FN_URL } from '../config.js';
 const html = htm.bind(React.createElement);
 
 // steps: 1小節を等しく分けたこま。'D' ダウン / 'U' アップ / 'X' ブラッシング(弦をミュートして「チャッ」) / '' 休み(手は空振り)
@@ -122,8 +124,145 @@ function usePatternSound(p, bpm, m) {
   return { on, at, toggle: () => (on ? stop() : start()), stop };
 }
 
-// 譜面の上に出す小さなカード。onClose で閉じる。chosen: 曲ごとに選んだ形の id。onChoose(id) で覚える
-export function StrumCard({ instrument, beatsPerBar, bpm, chosen, onChoose, onClose }) {
+// ---------------------------------------------------------------- この曲の弾き方(ネットから)
+// 解説ページに矢印で書かれたストローク(載せているページが多い形ほど上)と、
+// 再生回数の多い解説動画(ストローク・アルペジオ)を、Edge Function(hikigatari-yt の strum_find)が集める
+const webCache = new Map();
+function useStrumWeb(title, artist, on) {
+  const key = `${title}|${artist}`;
+  const [st, setSt] = useState(() => ({ busy: false, data: webCache.get(key) || null, err: null }));
+  const load = () => {
+    setSt({ busy: true, data: null, err: null });
+    api('strum_find', { title, artist }, { url: YT_FN_URL, timeout: 60000 })
+      .then((d) => {
+        webCache.set(key, d);
+        setSt({ busy: false, data: d, err: null });
+      })
+      .catch((e) => setSt({ busy: false, data: null, err: e.message }));
+  };
+  useEffect(() => {
+    if (on && title && !webCache.has(key)) load();
+  }, [on, key]);
+  return { ...st, retry: load };
+}
+
+const fmtViews = (n) => (!n ? '' : n >= 1e8 ? `${(n / 1e8).toFixed(1)}億回` : n >= 1e5 ? `${Math.round(n / 1e4)}万回` : n >= 1e4 ? `${(n / 1e4).toFixed(1)}万回` : `${n}回`);
+const ytThumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+
+// 矢印の並び。空白で区切られたかたまりを1つの箱にする(多くのページは1拍ずつ空けて書いている)
+function Arrows({ text }) {
+  const groups = text.split(' ').filter(Boolean);
+  return html`<div className="strum-arrows" aria-label=${text.replace(/↓/g, 'ダウン ').replace(/↑/g, 'アップ ').replace(/×/g, 'ミュート ')}>
+    ${groups.map(
+      (g, i) => html`<span key=${i} className="strum-beat">${[...g].map(
+        (c, k) => html`<span key=${k} className=${cx('strum-ar', c === '↓' ? 'is-down' : c === '↑' ? 'is-up' : 'is-mute')}>${c}</span>`,
+      )}</span>`,
+    )}
+  </div>`;
+}
+
+function SongStrum({ title, artist, chosen, onChoose }) {
+  const web = useStrumWeb(title, artist, true);
+  const d = web.data;
+  const pats = d?.patterns || [];
+  const [pi, setPi] = useState(0);
+  useEffect(() => {
+    const at = pats.findIndex((p) => 'web:' + p.arrows === chosen);
+    if (at >= 0) setPi(at);
+  }, [d]);
+  const [vt, setVt] = useState('stroke');
+  const [watch, setWatch] = useState(null); // 流している解説動画の id
+  // 動画を流している間は「再生アプリ」扱い(iPhone のマナーモードでも聞こえる)
+  useEffect(() => {
+    if (!watch) return;
+    holdPlayback();
+    return () => releasePlayback();
+  }, [watch]);
+  if (web.busy) return html`<p className="strum-wait">ネットで「${title}」の弾き方を探しています…（10秒ほど）</p>`;
+  if (web.err)
+    return html`<div className="strum-wait">
+      <p>弾き方を探せませんでした（${web.err}）</p>
+      <button className="btn btn-sm" onClick=${web.retry}>もう一度</button>
+    </div>`;
+  if (!d) return null;
+  const p = pats[pi] || null;
+  const mine = p && chosen === 'web:' + p.arrows;
+  const vids = (vt === 'stroke' ? d.stroke : d.arp) || [];
+  return html`<div className="strum-song">
+    <div className="strum-sec">ストローク（解説ページから）</div>
+    ${p
+      ? html`<div className="strum-pat">
+          <div className="strum-pat-head">
+            <b>${p.label || (pi === 0 ? 'いちばん多く載っている形' : `ほかの形 ${pi}`)}</b>
+            <small>${p.src.length > 1 ? `${p.src.length}か所で同じ形` : '1か所で見つけた形'}</small>
+          </div>
+          <${Arrows} text=${p.arrows} />
+          ${p.rhythm ? html`<div className="strum-rhythm">${p.rhythm}</div>` : null}
+          <div className="strum-src">
+            ${p.src.slice(0, 3).map((s, i) => html`<a key=${i} href=${s.url} target="_blank" rel="noopener">${s.name}</a>`)}
+          </div>
+          <div className="strum-foot">
+            ${pats.length > 1
+              ? pats.map(
+                  (q, i) => html`<button key=${i} className=${cx('chip chip-sm', i === pi && 'is-on')} onClick=${() => setPi(i)} aria-label=${`形 ${i + 1}`}>${i === 0 ? 'いちばん多い' : `形${i + 1}`}</button>`,
+                )
+              : null}
+            <button className=${cx('chip chip-sm', mine && 'is-on')} onClick=${() => onChoose(mine ? null : 'web:' + p.arrows)} aria-pressed=${!!mine}>${mine ? html`<${Icon} name="check" size=${14} />この曲ではこれ` : 'この曲ではこれにする'}</button>
+          </div>
+        </div>`
+      : html`<p className="strum-note">矢印で書かれたストロークは見つかりませんでした（画像で載せているページが多いため）。下の解説動画か「定番の形」を見てください。</p>`}
+
+    <div className="strum-sec strum-sec-row">
+      <span>いちばん見られている解説動画</span>
+      <span className="strum-mini-tabs">
+        <button className=${cx(vt === 'stroke' && 'is-on')} onClick=${() => { setVt('stroke'); setWatch(null); }}>ストローク</button>
+        <button className=${cx(vt === 'arp' && 'is-on')} onClick=${() => { setVt('arp'); setWatch(null); }}>アルペジオ</button>
+      </span>
+    </div>
+    ${vids.length
+      ? vids.map(
+          (v, i) => html`<div key=${v.id} className=${cx('strum-vid', i === 0 && 'is-top')}>
+            ${watch === v.id
+              ? html`<div className="strum-embed">
+                  <iframe src=${`https://www.youtube-nocookie.com/embed/${v.id}?autoplay=1&playsinline=1&rel=0`} title=${v.title} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen></iframe>
+                </div>`
+              : null}
+            <button className="strum-vid-row" onClick=${() => setWatch(watch === v.id ? null : v.id)} aria-label=${`${v.title} を${watch === v.id ? '閉じる' : '見る'}`}>
+              ${watch === v.id ? null : html`<img src=${ytThumb(v.id)} alt="" width="96" height="54" loading="lazy" />`}
+              <span className="strum-vid-text">
+                <b>${v.title}</b>
+                <small>${[i === 0 ? `いちばん再生が多い` : '', fmtViews(v.views) && `再生 ${fmtViews(v.views)}`, v.channel].filter(Boolean).join(' ・ ')}</small>
+              </span>
+            </button>
+          </div>`,
+        )
+      : html`<p className="strum-note">${vt === 'arp' ? 'アルペジオの解説動画は見つかりませんでした。' : 'ストロークの解説動画は見つかりませんでした。'}</p>`}
+  </div>`;
+}
+
+// 譜面の上に出す小さなカード。onClose で閉じる。chosen: 曲ごとに選んだ形(定番の形は id、ネットの形は 'web:矢印')。onChoose で覚える
+// ギターは「この曲の弾き方」(ネットから)と「定番の形」(拍子とテンポから)。ピアノは定番の形だけ
+export function StrumCard({ instrument, beatsPerBar, bpm, chosen, onChoose, onClose, title = '', artist = '' }) {
+  const guitar = instrument !== 'piano';
+  const [tab, setTab] = useState(guitar && title ? 'song' : 'basic');
+  return html`<div className="strum-card" role="dialog" aria-label="弾き方の見本">
+    <div className="strum-top">
+      ${guitar && title
+        ? html`<div className="strum-tabs" role="tablist">
+            <button role="tab" aria-selected=${tab === 'song'} className=${cx(tab === 'song' && 'is-on')} onClick=${() => setTab('song')}>この曲の弾き方</button>
+            <button role="tab" aria-selected=${tab === 'basic'} className=${cx(tab === 'basic' && 'is-on')} onClick=${() => setTab('basic')}>定番の形</button>
+          </div>`
+        : html`<b className="strum-top-title">弾き方の見本</b>`}
+      <button className="icon-btn" onClick=${onClose} aria-label="閉じる"><${Icon} name="close" size=${18} /></button>
+    </div>
+    ${tab === 'song'
+      ? html`<${SongStrum} title=${title} artist=${artist} chosen=${chosen} onChoose=${onChoose} />`
+      : html`<${BasicStrum} instrument=${instrument} beatsPerBar=${beatsPerBar} bpm=${bpm} chosen=${chosen} onChoose=${onChoose} />`}
+  </div>`;
+}
+
+// 定番の形(拍子とテンポからのおすすめ)。▶ でその曲のテンポで鳴らせる
+function BasicStrum({ instrument, beatsPerBar, bpm, chosen, onChoose }) {
   const list = strumList(instrument, beatsPerBar);
   const rec = recommendStrum(instrument, beatsPerBar, bpm);
   const first = list.find((p) => p.id === chosen) || rec;
@@ -134,7 +273,7 @@ export function StrumCard({ instrument, beatsPerBar, bpm, chosen, onChoose, onCl
   const cnt = counts(p.steps.length, m);
   const go = (d) => setIdx((i) => (i + d + list.length) % list.length);
   const mine = chosen === p.id;
-  return html`<div className="strum-card" role="dialog" aria-label="弾き方の見本">
+  return html`<div>
     <div className="strum-head">
       <button className="icon-btn strum-nav" onClick=${() => go(-1)} aria-label="前の弾き方"><${Icon} name="back" size=${18} /></button>
       <div className="strum-title">
@@ -142,7 +281,6 @@ export function StrumCard({ instrument, beatsPerBar, bpm, chosen, onChoose, onCl
         <small>${p === rec ? 'おすすめ（テンポから） ・ ' : ''}${'★'.repeat(p.lv)}${'☆'.repeat(3 - p.lv)} ・ ${idx + 1}/${list.length}</small>
       </div>
       <button className="icon-btn strum-nav strum-next" onClick=${() => go(1)} aria-label="次の弾き方"><${Icon} name="back" size=${18} /></button>
-      <button className="icon-btn" onClick=${() => { snd.stop(); onClose(); }} aria-label="閉じる"><${Icon} name="close" size=${18} /></button>
     </div>
     <div className=${cx('strum-steps', p.arp && 'is-arp')} style=${{ '--n': p.steps.length }}>
       ${p.steps.map(
@@ -162,5 +300,6 @@ export function StrumCard({ instrument, beatsPerBar, bpm, chosen, onChoose, onCl
 
 // ボタンに出す短い名前
 export function strumLabel(instrument, beatsPerBar, chosen) {
+  if (chosen?.startsWith('web:')) return chosen.slice(4);
   return strumList(instrument, beatsPerBar).find((p) => p.id === chosen)?.name || '';
 }

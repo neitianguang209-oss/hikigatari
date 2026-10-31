@@ -4702,12 +4702,223 @@ body:has(.rec-dock) .toast-host {
   z-index: 30;
   top: 8px;
   right: 12px;
-  width: min(360px, calc(100% - 24px));
+  width: min(380px, calc(100% - 24px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 10px 12px 12px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: var(--shadow-lg);
+}
+.strum-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.strum-top .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+.strum-top-title {
+  flex: 1;
+  font-size: 0.95rem;
+}
+.strum-tabs {
+  flex: 1;
+  display: flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.strum-tabs button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.strum-tabs button.is-on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.12));
+}
+.strum-wait {
+  margin: 14px 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: center;
+}
+.strum-wait p {
+  margin: 0 0 8px;
+}
+.strum-sec {
+  margin: 4px 0 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.strum-sec-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+}
+.strum-mini-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.strum-mini-tabs button {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.strum-mini-tabs button.is-on {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 700;
+}
+.strum-pat {
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.strum-pat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.strum-pat-head b {
+  font-size: 0.88rem;
+}
+.strum-pat-head small {
+  flex: none;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.strum-arrows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 4px;
+}
+.strum-beat {
+  display: inline-flex;
+  min-width: 34px;
+  justify-content: center;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.strum-ar {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.strum-ar.is-down {
+  color: var(--chord);
+}
+.strum-ar.is-up {
+  color: var(--accent);
+}
+.strum-ar.is-mute {
+  font-size: 1.05rem;
+  align-self: center;
+  color: var(--muted);
+}
+.strum-rhythm {
+  margin: 2px 0 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.strum-src {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 4px 0 8px;
+  font-size: 0.72rem;
+}
+.strum-src a {
+  color: var(--muted);
+}
+.strum-vid {
+  margin-bottom: 6px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.strum-vid.is-top {
+  outline: 2px solid var(--accent-soft);
+}
+.strum-vid-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.strum-vid-row img {
+  flex: none;
+  width: 96px;
+  height: 54px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.strum-vid-text {
+  min-width: 0;
+  line-height: 1.35;
+}
+.strum-vid-text b {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.strum-vid-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.strum-embed {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+.strum-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
 }
 .strum-head {
   display: flex;
