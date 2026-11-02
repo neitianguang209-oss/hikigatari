@@ -966,7 +966,7 @@ function SongReady({ song, reload }) {
   };
   const onSheetTap = (e) => {
     // 見出しなどのボタンはそれぞれの動き。コード名は、歌詞と同じ「そこから流す」(押さえ方は長押し)
-    const btn = e.target.closest('button, a, input, select, textarea, .song-head, .strip-top, .mod-mark, .ear-banner, .sheet-end');
+    const btn = e.target.closest('button, a, input, select, textarea, .song-head, .strip-top, .mod-mark, .ear-banner');
     if (btn && !btn.classList.contains('chord')) return;
     const hit = hitAt(e);
     if (!hit) return;
@@ -1103,7 +1103,9 @@ function SongReady({ song, reload }) {
                   : html`<b>Key ${keyName(soundKey)}</b>`}
               </div>
               <div className="muted small">
-                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmFrom === 'auto' || bpmFrom === 'len' ? '(推定)' : bpmKnown ? '' : '(仮)'} ・ ${sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
+                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmFrom === 'auto' || bpmFrom === 'len' ? '(推定)' : bpmKnown ? '' : '(仮)'} ・ ${song.sourceUrl
+                  ? html`<a href=${song.sourceUrl} target="_blank" rel="noopener" className="link">出典: ${sourceName(song.source)}${song.sourceLabel ? `（${song.sourceLabel}）` : ''}</a>`
+                  : sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
               </div>
             </div>
           </div>
@@ -1129,12 +1131,6 @@ function SongReady({ song, reload }) {
             picks=${picks}
             chordJump=${prefs.tapToStart !== false}
           />
-
-          <div className="sheet-end">
-            ${song.sourceUrl
-              ? html`<a href=${song.sourceUrl} target="_blank" rel="noopener" className="link">出典: ${sourceName(song.source)}${song.sourceLabel ? `（${song.sourceLabel}）` : ''}</a>`
-              : html`<span className="muted">${song.source === 'ear' ? '耳コピで作った下書き（自動）' : '自分で入力した譜面'}</span>`}
-          </div>
         </div>
       </main>
       <aside className="strip-side" aria-label="この曲のコード">

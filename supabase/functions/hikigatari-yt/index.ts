@@ -243,11 +243,11 @@ async function krcAll(title: string, artist: string, durationMs: number) {
 }
 
 // ---------------------------------------------------------------- 弾き方(ストローク・アルペジオ)をネットから
-// 公式の弾き方は無いので、2つの手がかりを集める:
-// ・解説のページやブログに文字で書かれたストロークの矢印(↓↑)。同じ形を載せているページが多いものほど上に
-//   (画像で載せているページは読めない)
-// ・YouTube の弾き方の解説動画を、再生回数の多い順に(ストローク・アルペジオそれぞれ)。動画の説明に矢印があればそれも拾う
-type Pat = { arrows: string; rhythm: string; label: string; src: { name: string; url: string }[] };
+// 公式の弾き方は無いので、文字で書かれた弾き方を集めて、同じ形が多いものほど上にする:
+// ・解説のページやブログのストロークの矢印(↓↑)とアルペジオの弦の順番(画像で載せているページは読めない)
+// ・再生回数の多い弾き方の解説動画(ストローク・アルペジオ それぞれ4本まで)の説明と、コメント欄の書き込み
+//   (動画そのものは返さない。アプリでは集めた形を図で見せる)
+type Pat = { arrows: string; steps: string[] | null; rhythm: string; label: string; src: { name: string; url: string }[] };
 
 const SKIP_HOST = /youtube\.com|youtu\.be|ufret\.jp|piascore|amazon|rakuten|twitter\.com|x\.com|instagram|tiktok|facebook|chordwiki|j-total|music\.j-total|utaten|uta-net|apple\.com|spotify|wikipedia/;
 
@@ -312,29 +312,77 @@ function pageText(h: string) {
 }
 
 const SECTION = /(イントロ|Aメロ|Bメロ|Cメロ|サビ|間奏|アウトロ|大サビ|ラスサビ|基本|メイン|パターン|1番|2番)/i;
-const RHYTHM = /^[タンッーカジャチャ・\s]+$/;
+const RHYTHM = /^[タンッーカジャチャじゃんかちゃっ・〜\s]+$/;
 
-// 矢印だけの行(前に「サビ：」などの見出しがついていてもよい)を拾う
+// 矢印の並び → 1こまずつ(D=ダウン U=アップ X=ミュート ''=空振り/のばす)。こまの数が拍に合わないときは null(箱で見せるだけ)
+function stepsOf(arrows: string): string[] | null {
+  const st = [...arrows.replace(/\s/g, '')].map((c) => (c === '↓' ? 'D' : c === '↑' ? 'U' : c === '×' ? 'X' : ''));
+  const rest = st.some((s) => !s);
+  if (!rest && st.join('') === 'DDUUDU') return ['D', '', 'D', 'U', '', 'U', 'D', 'U']; // 「ジャン・ジャカ・カ・ジャカ」の書き方
+  if ([6, 8, 12, 16].includes(st.length) && (rest || st.length === 8 || st.length === 16)) return st;
+  return null;
+}
+
+// 「ダウン ダウン アップ」のような言葉の書き方を矢印に
+function wordsToArrows(line: string) {
+  if (!/^((ダウン|アップ|空振り|空ピッキング|ミュート)[\s、,・→\-]*){4,}$/.test(line)) return line;
+  return line.replace(/ダウン/g, '↓').replace(/アップ/g, '↑').replace(/ミュート/g, '×').replace(/空振り|空ピッキング/g, '・').replace(/[、,→\-]/g, ' ');
+}
+
+// 矢印だけの行(前に「サビ：」などの見出し、後ろに「(自分用)」などの短い書き足しがあってもよい)を拾う。
+// 続けて書かれた半小節ずつの行(間に「じゃーん じゃん」の行があってもよい)は1つにつなぐ
 function arrowsIn(text: string) {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const out: { arrows: string; rhythm: string; label: string }[] = [];
-  lines.forEach((line, i) => {
+  const out: { arrows: string; rhythm: string; label: string; at: number }[] = [];
+  lines.forEach((raw, i) => {
     let label = '';
-    let body = line;
-    const pre = line.match(/^(.{1,12}?)[:：]\s*(.+)$/);
+    let body = wordsToArrows(raw);
+    const pre = body.match(/^(.{1,12}?)[:：→]\s*(.+)$/);
     if (pre && SECTION.test(pre[1])) {
       label = pre[1].trim();
       body = pre[2];
     }
-    body = body.replace(/[xX✕✖]/g, '×').replace(/\s+/g, ' ').trim();
+    body = body
+      .replace(/[（(][^↓↑（）()]{1,16}[）)]\s*$/, '')
+      .replace(/^([↓↑×xX✕✖・〜~～\-ー_()（）\s]+?)\s*[^↓↑\s][^↓↑]{0,14}$/, '$1')
+      .replace(/[（(]\s*[↓↑]\s*[）)]/g, '・')
+      .replace(/[xX✕✖]/g, '×')
+      .replace(/[〜~～ー_\-]/g, '・')
+      .replace(/\s+/g, ' ')
+      .trim();
     const bare = body.replace(/\s/g, '');
     const n = (bare.match(/[↓↑]/g) || []).length;
-    if (n < 4 || n > 48 || !/^[↓↑×・\-()（）]+$/.test(bare)) return;
+    if (n < 3 || bare.length > 48 || !/^[↓↑×・]+$/.test(bare)) return;
     if (!label && i > 0 && lines[i - 1].length <= 24 && SECTION.test(lines[i - 1])) label = lines[i - 1].replace(/[【】\[\]■●◆▼・:：]/g, ' ').trim();
     const next = lines[i + 1] || '';
-    const rhythm = next.length <= 60 && RHYTHM.test(next) && /[タン]/.test(next) ? next.replace(/\s+/g, ' ') : '';
-    out.push({ arrows: body, rhythm, label });
+    const rhythm = next.length <= 60 && RHYTHM.test(next) && /[タンじゃジャ]/.test(next) ? next.replace(/\s+/g, ' ') : '';
+    const prev = out[out.length - 1];
+    const plen = prev ? prev.arrows.replace(/\s/g, '').length : 0;
+    if (prev && !label && i - prev.at <= 2 && plen === bare.length && plen + bare.length <= 16) {
+      prev.arrows += ' ' + body;
+      if (rhythm) prev.rhythm = prev.rhythm ? `${prev.rhythm} ${rhythm}` : rhythm;
+      prev.at = i;
+      return;
+    }
+    if (n < 4 && bare.length < 8) return;
+    out.push({ arrows: body, rhythm, label, at: i });
   });
+  return out.map(({ at: _at, ...a }) => a);
+}
+
+// アルペジオ: 「5→3→2→3→1→3→2→3」「5弦-3弦-2弦…」のような弦の順番の行を拾う(B = 根音の弦)
+function arpIn(text: string) {
+  const out: string[] = [];
+  for (const raw of text.split('\n')) {
+    const l = raw
+      .trim()
+      .replace(/弦/g, '')
+      .replace(/根音|ルート|ベース|[RB]/g, 'B')
+      .replace(/[（(][^）)]{1,16}[）)]\s*$/, '')
+      .replace(/^[^\dB]{1,10}[:：]\s*/, '');
+    if (!/[→\-ー>＞]/.test(l)) continue;
+    if (/^[1-6B](\s*[→\-ー>＞、,・]\s*[1-6B]){3,15}$/.test(l)) out.push(l.split(/[^1-6B]+/).filter(Boolean).join(' '));
+  }
   return out;
 }
 
@@ -377,60 +425,112 @@ async function ytDescription(id: string) {
 
 const LESSON = /弾き方|解説|レッスン|ストローク|アルペジオ|講座|初心者|簡単|コード|tab|弾き語り|how to|tutorial|指弾き|リズム/i;
 
+// 動画のコメント(上の方に出る20件)。「↓〜〜〜↓〜↓↑…（自分用）」のように書き残す人が多い
+async function ytComments(id: string) {
+  const yt = (body: Record<string, unknown>) =>
+    fetch('https://www.youtube.com/youtubei/v1/next?prettyPrint=false', {
+      method: 'POST',
+      headers: { 'User-Agent': UA_DESKTOP, 'Content-Type': 'application/json', 'Accept-Language': 'ja' },
+      body: JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: '2.20250101.00.00', hl: 'ja', gl: 'JP' } }, ...body }),
+      signal: AbortSignal.timeout(6000),
+    }).then((r) => (r.ok ? r.json() : {}));
+  // deno-lint-ignore no-explicit-any
+  const walk = (n: any, f: (o: any) => void) => {
+    if (Array.isArray(n)) n.forEach((x) => walk(x, f));
+    else if (n && typeof n === 'object') {
+      f(n);
+      for (const v of Object.values(n)) walk(v, f);
+    }
+  };
+  const first = await yt({ videoId: id });
+  let tok = '';
+  walk(first, (o) => {
+    if (o.sectionIdentifier === 'comment-item-section') walk(o, (c) => (tok ||= c.continuationCommand?.token || ''));
+  });
+  if (!tok) walk(first, (o) => (o.continuationCommand?.token ? (tok = o.continuationCommand.token) : null));
+  if (!tok) return [] as string[];
+  const page = await yt({ continuation: tok });
+  const out: string[] = [];
+  walk(page, (o) => {
+    const c = o.commentEntityPayload?.properties?.content?.content;
+    if (typeof c === 'string') out.push(c);
+  });
+  return out;
+}
+
+type Found = { arrows: string; rhythm: string; label: string; name: string; url: string; views: number };
+
+// 同じ形(空白を除いて同じ並び)をまとめ、載っている所が多い順(同じなら再生回数の多い動画から出た順)
+function group(found: Found[], arp = false) {
+  const by = new Map<string, Pat & { views: number }>();
+  for (const f of found) {
+    const k = f.arrows.replace(/\s/g, '');
+    const p = by.get(k) || { arrows: f.arrows, steps: arp ? f.arrows.split(' ') : stepsOf(f.arrows), rhythm: f.rhythm, label: f.label, src: [], views: 0 };
+    if (!p.rhythm && f.rhythm) p.rhythm = f.rhythm;
+    if (!p.label && f.label) p.label = f.label;
+    if (!p.src.some((s) => s.url === f.url && s.name === f.name)) p.src.push({ name: f.name, url: f.url });
+    p.views = Math.max(p.views, f.views);
+    by.set(k, p);
+  }
+  return [...by.values()]
+    .sort((a, b) => b.src.length - a.src.length || b.views - a.views)
+    .slice(0, 6)
+    .map(({ views: _v, ...p }) => p);
+}
+
+// 解説ページと、再生回数の多い解説動画(説明とコメント)から、弾き方(矢印・弦の順番)を集める
 async function strumFind(title: string, artist: string) {
   const t = baseTitle(title);
   const ft = fold(t);
   const about = (s: string) => fold(s).includes(ft);
 
-  // 解説動画(ストローク・アルペジオ)
   const vids = async (q: string, ok: (s: string) => boolean) => {
     const got = await ytSearch(q, [20, 2400]).catch(() => [] as YtHit[]);
     return got
       .filter((v) => about(v.title) && LESSON.test(v.title) && ok(v.title))
       .sort((a, b) => (b.views || 0) - (a.views || 0))
-      .slice(0, 3);
+      .slice(0, 4);
   };
   const [stroke, arp, urlsA, urlsB] = await Promise.all([
-    // ストローク: アルペジオだけの動画は外す
     vids(`${artist} ${t} ギター 弾き方 ストローク`, (s) => !/アルペジオ|指弾き/.test(s) || /ストローク/.test(s)),
     vids(`${artist} ${t} ギター アルペジオ 弾き方`, (s) => /アルペジオ|指弾き|arpeggio/i.test(s)),
     webSearch(`${t} ${artist} ギター ストローク パターン`),
     webSearch(`${t} ${artist} ギター 弾き方 ストローク 矢印`),
   ]);
 
-  // ページ(と動画の説明)から矢印を集め、同じ形をまとめる
   const urls = [...new Set([...urlsA.slice(0, 6), ...urlsB.slice(0, 4)])].filter((u) => !SKIP_HOST.test(hostOf(u))).slice(0, 8);
-  const found: { arrows: string; rhythm: string; label: string; name: string; url: string }[] = [];
+  const found: Found[] = [];
+  const arps: Found[] = [];
+  const times = (n = 0) => (n >= 1e4 ? `再生${Math.round(n / 1e4)}万回` : n ? `再生${n}回` : '');
+  const fromVideo = async (v: YtHit, kind: 'stroke' | 'arp') => {
+    const url = `https://www.youtube.com/watch?v=${v.id}`;
+    const [desc, coms] = await Promise.all([ytDescription(v.id).catch(() => ''), ytComments(v.id).catch(() => [] as string[])]);
+    const who = `${v.channel || 'YouTube'}の解説動画${v.views ? `（${times(v.views)}）` : ''}`;
+    const texts: [string, string][] = [[desc, `${who}の説明`], ...coms.map((c) => [c, `${who}のコメント`] as [string, string])];
+    for (const [tx, name] of texts) {
+      if (kind === 'stroke') for (const a of arrowsIn(tx).slice(0, 3)) found.push({ ...a, name, url, views: v.views || 0 });
+      for (const a of arpIn(tx).slice(0, 2)) arps.push({ arrows: a, rhythm: '', label: '', name, url, views: v.views || 0 });
+    }
+  };
   await Promise.all([
     ...urls.map(async (u) => {
       try {
         const h = await getText(u);
         const ttl = unescape(h.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
         if (!about(ttl)) return; // ほかの曲のページ
-        for (const a of arrowsIn(pageText(h)).slice(0, 6)) found.push({ ...a, name: hostOf(u), url: u });
+        const tx = pageText(h);
+        for (const a of arrowsIn(tx).slice(0, 6)) found.push({ ...a, name: hostOf(u), url: u, views: 0 });
+        for (const a of arpIn(tx).slice(0, 3)) arps.push({ arrows: a, rhythm: '', label: '', name: hostOf(u), url: u, views: 0 });
       } catch {
         // 読めないページは飛ばす
       }
     }),
-    ...stroke.slice(0, 3).map(async (v) => {
-      try {
-        for (const a of arrowsIn(await ytDescription(v.id)).slice(0, 4)) found.push({ ...a, name: v.channel || 'YouTube', url: `https://www.youtube.com/watch?v=${v.id}` });
-      } catch {
-        // 説明が読めなければ飛ばす
-      }
-    }),
+    ...stroke.map((v) => fromVideo(v, 'stroke').catch(() => {})),
+    ...arp.slice(0, 3).map((v) => fromVideo(v, 'arp').catch(() => {})),
   ]);
-  const by = new Map<string, Pat>();
-  for (const f of found) {
-    const k = f.arrows.replace(/\s/g, '');
-    const p = by.get(k) || { arrows: f.arrows, rhythm: f.rhythm, label: f.label, src: [] };
-    if (!p.rhythm && f.rhythm) p.rhythm = f.rhythm;
-    if (!p.label && f.label) p.label = f.label;
-    if (!p.src.some((s) => s.url === f.url)) p.src.push({ name: f.name, url: f.url });
-    by.set(k, p);
-  }
-  const patterns = [...by.values()].sort((a, b) => b.src.length - a.src.length).slice(0, 6);
-  return { patterns, stroke, arp };
+  // 解説動画の題名にある「16ビート」「8ビート」(矢印が見つからないときの手がかり)
+  const bt = [...stroke, ...arp].map((v) => v.title.normalize('NFKC').match(/(16|8)\s*ビート/)?.[1]).find(Boolean) || '';
+  return { patterns: group(found), arps: group(arps, true).slice(0, 3), beat: bt, looked: stroke.length + arp.length + urls.length };
 }
 
 Deno.serve(async (req) => {
@@ -453,14 +553,14 @@ Deno.serve(async (req) => {
       return json({ list });
     }
     if (body.action === 'strum_find') {
-      if (!title) return json({ patterns: [], stroke: [], arp: [] });
-      const ck = `strum1:${norm(`${artist} ${baseTitle(title)}`)}`;
+      if (!title) return json({ patterns: [], arps: [], beat: '' });
+      const ck = `strum2:${norm(`${artist} ${baseTitle(title)}`)}`;
       if (!body.force) {
         const { data } = await db.from('hikigatari_sheet_cache').select('data,fetched_at').eq('key', ck).maybeSingle();
         if (data && Date.now() - new Date(data.fetched_at).getTime() < TTL_MS) return json({ ...data.data, cached: true });
       }
       const out = await strumFind(title, artist);
-      if (out.patterns.length || out.stroke.length || out.arp.length) await db.from('hikigatari_sheet_cache').upsert({ key: ck, data: out, fetched_at: new Date().toISOString() });
+      if (out.patterns.length || out.arps.length) await db.from('hikigatari_sheet_cache').upsert({ key: ck, data: out, fetched_at: new Date().toISOString() });
       return json(out);
     }
     if (body.action !== 'yt_search') return json({ error: 'unknown action' }, 400);

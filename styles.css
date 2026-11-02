@@ -1017,7 +1017,7 @@ textarea {
   --fs: 1;
   max-width: 780px;
   margin: 0 auto;
-  padding: 14px 18px 45vh;
+  padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
   font-size: calc(var(--base-fs, 17px) * var(--fs));
 }
 .song-head {
@@ -4766,35 +4766,6 @@ body:has(.rec-dock) .toast-host {
   font-weight: 700;
   color: var(--muted);
 }
-.strum-sec-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 14px;
-}
-.strum-mini-tabs {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-.strum-mini-tabs button {
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.strum-mini-tabs button.is-on {
-  background: var(--surface);
-  color: var(--text);
-  font-weight: 700;
-}
 .strum-pat {
   padding: 10px;
   border-radius: 10px;
@@ -4861,64 +4832,19 @@ body:has(.rec-dock) .toast-host {
 .strum-src a {
   color: var(--muted);
 }
-.strum-vid {
-  margin-bottom: 6px;
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--surface-2);
-}
-.strum-vid.is-top {
-  outline: 2px solid var(--accent-soft);
-}
-.strum-vid-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 6px;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.strum-vid-row img {
-  flex: none;
-  width: 96px;
-  height: 54px;
-  border-radius: 6px;
-  object-fit: cover;
-}
-.strum-vid-text {
-  min-width: 0;
-  line-height: 1.35;
-}
-.strum-vid-text b {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-.strum-vid-text small {
-  display: block;
-  margin-top: 2px;
-  font-size: 0.7rem;
+.strum-src span {
   color: var(--muted);
+  font-weight: 700;
 }
-.strum-embed {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  background: #000;
+.strum-pat .strum-step {
+  background: var(--surface);
 }
-.strum-embed iframe {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
+.strum-pat .strum-step.is-now {
+  background: var(--accent-soft);
+}
+/* 16分のように こまが多いときは2段に(1段目が1・2拍、2段目が3・4拍) */
+.strum-steps.is-many {
+  row-gap: 6px;
 }
 .strum-head {
   display: flex;

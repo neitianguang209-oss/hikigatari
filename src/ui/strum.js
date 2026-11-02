@@ -125,8 +125,8 @@ function usePatternSound(p, bpm, m) {
 }
 
 // ---------------------------------------------------------------- この曲の弾き方(ネットから)
-// 解説ページに矢印で書かれたストローク(載せているページが多い形ほど上)と、
-// 再生回数の多い解説動画(ストローク・アルペジオ)を、Edge Function(hikigatari-yt の strum_find)が集める
+// 解説ページと、再生回数の多い解説動画の説明・コメントに書かれた弾き方を、Edge Function(hikigatari-yt の strum_find)が集める。
+// 動画そのものは見せず、集めた形を「定番の形」と同じ図(1こまずつ・数え方つき・♩で鳴らせる)で出す
 const webCache = new Map();
 function useStrumWeb(title, artist, on) {
   const key = `${title}|${artist}`;
@@ -146,97 +146,83 @@ function useStrumWeb(title, artist, on) {
   return { ...st, retry: load };
 }
 
-const fmtViews = (n) => (!n ? '' : n >= 1e8 ? `${(n / 1e8).toFixed(1)}億回` : n >= 1e5 ? `${Math.round(n / 1e4)}万回` : n >= 1e4 ? `${(n / 1e4).toFixed(1)}万回` : `${n}回`);
-const ytThumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
-
-// 矢印の並び。空白で区切られたかたまりを1つの箱にする(多くのページは1拍ずつ空けて書いている)
-function Arrows({ text }) {
-  const groups = text.split(' ').filter(Boolean);
-  return html`<div className="strum-arrows" aria-label=${text.replace(/↓/g, 'ダウン ').replace(/↑/g, 'アップ ').replace(/×/g, 'ミュート ')}>
-    ${groups.map(
-      (g, i) => html`<span key=${i} className="strum-beat">${[...g].map(
-        (c, k) => html`<span key=${k} className=${cx('strum-ar', c === '↓' ? 'is-down' : c === '↑' ? 'is-up' : 'is-mute')}>${c}</span>`,
-      )}</span>`,
+// 図: steps があれば1こまずつ(数え方つき・鳴らしているこまが光る)、無ければ書かれていたかたまりごとの箱
+function StepGrid({ steps, text, m, at = -1, arp = false }) {
+  if (!steps)
+    return html`<div className="strum-arrows" aria-label=${text.replace(/↓/g, 'ダウン ').replace(/↑/g, 'アップ ').replace(/×/g, 'ミュート ')}>
+      ${text.split(' ').filter(Boolean).map(
+        (g, i) => html`<span key=${i} className="strum-beat">${[...g].map(
+          (c, k) => html`<span key=${k} className=${cx('strum-ar', c === '↓' ? 'is-down' : c === '↑' ? 'is-up' : 'is-mute')}>${c}</span>`,
+        )}</span>`,
+      )}
+    </div>`;
+  const cnt = counts(steps.length, m);
+  return html`<div className=${cx('strum-steps', arp && 'is-arp', steps.length > 8 && 'is-many')} style=${{ '--n': steps.length > 8 ? steps.length / 2 : steps.length }}>
+    ${steps.map(
+      (s, i) => html`<div key=${i} className=${cx('strum-step', !s && 'is-rest', at === i && 'is-now', s === 'X' && 'is-mute')}>
+        <span className="strum-mark">${s ? ARROW[s] || s : '・'}</span>
+        <span className="strum-count">${cnt[i]}</span>
+      </div>`,
     )}
   </div>`;
 }
 
-function SongStrum({ title, artist, chosen, onChoose }) {
+// 集めた形(または見つからないときの定番)を1つ見せる。▶ でその曲のテンポで鳴らせる
+function FoundPattern({ pats, fallback, kind, bpm, m, chosen, onChoose, beat }) {
+  const [pi, setPi] = useState(() => Math.max(0, pats.findIndex((p) => 'web:' + p.arrows === chosen)));
+  const p = pats[pi] || null;
+  const shown = p ? { id: 'web:' + p.arrows, steps: p.steps } : fallback;
+  const snd = usePatternSound({ id: shown.id, steps: shown.steps || [] }, bpm, m);
+  const mine = chosen === shown.id;
+  const arp = kind === 'arp';
+  return html`<div className="strum-pat">
+    <div className="strum-pat-head">
+      <b>${p ? p.label || (pi === 0 ? 'いちばん多く書かれている形' : `ほかの形 ${pi}`) : fallback.name}</b>
+      <small>${p ? (p.src.length > 1 ? `${p.src.length}か所で同じ形` : '1か所で見つけた形') : 'ネットで見つからなかったので定番の形'}</small>
+    </div>
+    <${StepGrid} steps=${shown.steps} text=${p ? p.arrows : ''} m=${m} at=${snd.at} arp=${arp} />
+    ${p?.rhythm ? html`<div className="strum-rhythm">${p.rhythm}</div>` : null}
+    ${arp ? html`<p className="strum-note">数字は弦の番号。B = コードの根音の弦（C なら5弦、G なら6弦）。</p>` : null}
+    ${!p && !arp && beat ? html`<p className="strum-note">解説動画では「${beat}ビート」で弾いています。</p>` : null}
+    ${!p && !arp ? html`<p className="strum-note">${fallback.note}</p>` : null}
+    ${p
+      ? html`<div className="strum-src">
+          <span>出どころ</span>
+          ${p.src.slice(0, 3).map((s, i) => html`<a key=${i} href=${s.url} target="_blank" rel="noopener">${s.name}</a>`)}
+        </div>`
+      : null}
+    <div className="strum-foot">
+      ${shown.steps ? html`<button className=${cx('chip chip-sm', snd.on && 'is-on')} onClick=${snd.toggle} aria-label=${snd.on ? '止める' : `♩=${bpm} で鳴らす`}><${PlayIcon} playing=${snd.on} size=${14} />♩=${bpm}</button>` : null}
+      ${pats.length > 1
+        ? pats.map(
+            (q, i) => html`<button key=${i} className=${cx('chip chip-sm', i === pi && 'is-on')} onClick=${() => setPi(i)} aria-label=${`形 ${i + 1}`}>${i === 0 ? 'いちばん多い' : `形${i + 1}`}</button>`,
+          )
+        : null}
+      <button className=${cx('chip chip-sm', mine && 'is-on')} onClick=${() => onChoose(mine ? null : shown.id)} aria-pressed=${mine}>${mine ? html`<${Icon} name="check" size=${14} />この曲ではこれ` : 'この曲ではこれにする'}</button>
+    </div>
+  </div>`;
+}
+
+function SongStrum({ title, artist, beatsPerBar, bpm, chosen, onChoose }) {
   const web = useStrumWeb(title, artist, true);
   const d = web.data;
-  const pats = d?.patterns || [];
-  const [pi, setPi] = useState(0);
-  useEffect(() => {
-    const at = pats.findIndex((p) => 'web:' + p.arrows === chosen);
-    if (at >= 0) setPi(at);
-  }, [d]);
-  const [vt, setVt] = useState('stroke');
-  const [watch, setWatch] = useState(null); // 流している解説動画の id
-  // 動画を流している間は「再生アプリ」扱い(iPhone のマナーモードでも聞こえる)
-  useEffect(() => {
-    if (!watch) return;
-    holdPlayback();
-    return () => releasePlayback();
-  }, [watch]);
-  if (web.busy) return html`<p className="strum-wait">ネットで「${title}」の弾き方を探しています…（10秒ほど）</p>`;
+  const m = meterOf(beatsPerBar);
+  if (web.busy) return html`<p className="strum-wait">ネットの解説と、よく見られている解説動画のコメントから「${title}」の弾き方を探しています…（15秒ほど）</p>`;
   if (web.err)
     return html`<div className="strum-wait">
       <p>弾き方を探せませんでした（${web.err}）</p>
       <button className="btn btn-sm" onClick=${web.retry}>もう一度</button>
     </div>`;
   if (!d) return null;
-  const p = pats[pi] || null;
-  const mine = p && chosen === 'web:' + p.arrows;
-  const vids = (vt === 'stroke' ? d.stroke : d.arp) || [];
+  const list = strumList('guitar', beatsPerBar);
+  const rec = recommendStrum('guitar', beatsPerBar, bpm);
+  const strokeRec = rec.arp ? list.find((p) => !p.arp && p.lv === 2) || list[0] : rec;
+  const arpRec = rec.arp ? rec : list.find((p) => p.arp) || list[0];
   return html`<div className="strum-song">
-    <div className="strum-sec">ストローク（解説ページから）</div>
-    ${p
-      ? html`<div className="strum-pat">
-          <div className="strum-pat-head">
-            <b>${p.label || (pi === 0 ? 'いちばん多く載っている形' : `ほかの形 ${pi}`)}</b>
-            <small>${p.src.length > 1 ? `${p.src.length}か所で同じ形` : '1か所で見つけた形'}</small>
-          </div>
-          <${Arrows} text=${p.arrows} />
-          ${p.rhythm ? html`<div className="strum-rhythm">${p.rhythm}</div>` : null}
-          <div className="strum-src">
-            ${p.src.slice(0, 3).map((s, i) => html`<a key=${i} href=${s.url} target="_blank" rel="noopener">${s.name}</a>`)}
-          </div>
-          <div className="strum-foot">
-            ${pats.length > 1
-              ? pats.map(
-                  (q, i) => html`<button key=${i} className=${cx('chip chip-sm', i === pi && 'is-on')} onClick=${() => setPi(i)} aria-label=${`形 ${i + 1}`}>${i === 0 ? 'いちばん多い' : `形${i + 1}`}</button>`,
-                )
-              : null}
-            <button className=${cx('chip chip-sm', mine && 'is-on')} onClick=${() => onChoose(mine ? null : 'web:' + p.arrows)} aria-pressed=${!!mine}>${mine ? html`<${Icon} name="check" size=${14} />この曲ではこれ` : 'この曲ではこれにする'}</button>
-          </div>
-        </div>`
-      : html`<p className="strum-note">矢印で書かれたストロークは見つかりませんでした（画像で載せているページが多いため）。下の解説動画か「定番の形」を見てください。</p>`}
-
-    <div className="strum-sec strum-sec-row">
-      <span>いちばん見られている解説動画</span>
-      <span className="strum-mini-tabs">
-        <button className=${cx(vt === 'stroke' && 'is-on')} onClick=${() => { setVt('stroke'); setWatch(null); }}>ストローク</button>
-        <button className=${cx(vt === 'arp' && 'is-on')} onClick=${() => { setVt('arp'); setWatch(null); }}>アルペジオ</button>
-      </span>
-    </div>
-    ${vids.length
-      ? vids.map(
-          (v, i) => html`<div key=${v.id} className=${cx('strum-vid', i === 0 && 'is-top')}>
-            ${watch === v.id
-              ? html`<div className="strum-embed">
-                  <iframe src=${`https://www.youtube-nocookie.com/embed/${v.id}?autoplay=1&playsinline=1&rel=0`} title=${v.title} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen></iframe>
-                </div>`
-              : null}
-            <button className="strum-vid-row" onClick=${() => setWatch(watch === v.id ? null : v.id)} aria-label=${`${v.title} を${watch === v.id ? '閉じる' : '見る'}`}>
-              ${watch === v.id ? null : html`<img src=${ytThumb(v.id)} alt="" width="96" height="54" loading="lazy" />`}
-              <span className="strum-vid-text">
-                <b>${v.title}</b>
-                <small>${[i === 0 ? `いちばん再生が多い` : '', fmtViews(v.views) && `再生 ${fmtViews(v.views)}`, v.channel].filter(Boolean).join(' ・ ')}</small>
-              </span>
-            </button>
-          </div>`,
-        )
-      : html`<p className="strum-note">${vt === 'arp' ? 'アルペジオの解説動画は見つかりませんでした。' : 'ストロークの解説動画は見つかりませんでした。'}</p>`}
+    <div className="strum-sec">ストローク</div>
+    <${FoundPattern} key=${'s' + title} pats=${d.patterns || []} fallback=${strokeRec} kind="stroke" bpm=${bpm} m=${m} chosen=${chosen} onChoose=${onChoose} beat=${d.beat} />
+    <div className="strum-sec">アルペジオ</div>
+    <${FoundPattern} key=${'a' + title} pats=${d.arps || []} fallback=${arpRec} kind="arp" bpm=${bpm} m=${m} chosen=${chosen} onChoose=${onChoose} />
   </div>`;
 }
 
@@ -256,7 +242,7 @@ export function StrumCard({ instrument, beatsPerBar, bpm, chosen, onChoose, onCl
       <button className="icon-btn" onClick=${onClose} aria-label="閉じる"><${Icon} name="close" size=${18} /></button>
     </div>
     ${tab === 'song'
-      ? html`<${SongStrum} title=${title} artist=${artist} chosen=${chosen} onChoose=${onChoose} />`
+      ? html`<${SongStrum} title=${title} artist=${artist} beatsPerBar=${beatsPerBar} bpm=${bpm} chosen=${chosen} onChoose=${onChoose} />`
       : html`<${BasicStrum} instrument=${instrument} beatsPerBar=${beatsPerBar} bpm=${bpm} chosen=${chosen} onChoose=${onChoose} />`}
   </div>`;
 }
