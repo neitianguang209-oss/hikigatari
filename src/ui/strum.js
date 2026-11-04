@@ -133,7 +133,7 @@ function useStrumWeb(title, artist, on) {
   const [st, setSt] = useState(() => ({ busy: false, data: webCache.get(key) || null, err: null }));
   const load = () => {
     setSt({ busy: true, data: null, err: null });
-    api('strum_find', { title, artist }, { url: YT_FN_URL, timeout: 60000 })
+    api('strum_find', { title, artist }, { url: YT_FN_URL, timeout: 100000 })
       .then((d) => {
         webCache.set(key, d);
         setSt({ busy: false, data: d, err: null });
@@ -177,8 +177,8 @@ function FoundPattern({ pats, fallback, kind, bpm, m, chosen, onChoose, beat }) 
   const arp = kind === 'arp';
   return html`<div className="strum-pat">
     <div className="strum-pat-head">
-      <b>${p ? p.label || (pi === 0 ? 'いちばん多く書かれている形' : `ほかの形 ${pi}`) : fallback.name}</b>
-      <small>${p ? (p.src.length > 1 ? `${p.src.length}か所で同じ形` : '1か所で見つけた形') : 'ネットで見つからなかったので定番の形'}</small>
+      <b>${p ? p.label || (p.top ? 'おすすめの形' : pi === 0 ? 'いちばん多く書かれている形' : `ほかの形 ${pi}`) : fallback.name}</b>
+      <small>${p ? (p.top ? '検索でいちばん上のページの形' : p.src.length > 1 ? `${p.src.length}か所で同じ形` : '1か所で見つけた形') : 'ネットで見つからなかったので定番の形'}</small>
     </div>
     <${StepGrid} steps=${shown.steps} text=${p ? p.arrows : ''} m=${m} at=${snd.at} arp=${arp} />
     ${p?.rhythm ? html`<div className="strum-rhythm">${p.rhythm}</div>` : null}
@@ -195,7 +195,7 @@ function FoundPattern({ pats, fallback, kind, bpm, m, chosen, onChoose, beat }) 
       ${shown.steps ? html`<button className=${cx('chip chip-sm', snd.on && 'is-on')} onClick=${snd.toggle} aria-label=${snd.on ? '止める' : `♩=${bpm} で鳴らす`}><${PlayIcon} playing=${snd.on} size=${14} />♩=${bpm}</button>` : null}
       ${pats.length > 1
         ? pats.map(
-            (q, i) => html`<button key=${i} className=${cx('chip chip-sm', i === pi && 'is-on')} onClick=${() => setPi(i)} aria-label=${`形 ${i + 1}`}>${i === 0 ? 'いちばん多い' : `形${i + 1}`}</button>`,
+            (q, i) => html`<button key=${i} className=${cx('chip chip-sm', i === pi && 'is-on')} onClick=${() => setPi(i)} aria-label=${`形 ${i + 1}`}>${q.top ? q.label || '検索の1番' : i === 0 || pats[i - 1].top ? 'いちばん多い' : `形${i + 1}`}</button>`,
           )
         : null}
       <button className=${cx('chip chip-sm', mine && 'is-on')} onClick=${() => onChoose(mine ? null : shown.id)} aria-pressed=${mine}>${mine ? html`<${Icon} name="check" size=${14} />この曲ではこれ` : 'この曲ではこれにする'}</button>
@@ -207,7 +207,7 @@ function SongStrum({ title, artist, beatsPerBar, bpm, chosen, onChoose }) {
   const web = useStrumWeb(title, artist, true);
   const d = web.data;
   const m = meterOf(beatsPerBar);
-  if (web.busy) return html`<p className="strum-wait">ネットの解説と、よく見られている解説動画のコメントから「${title}」の弾き方を探しています…（15秒ほど）</p>`;
+  if (web.busy) return html`<p className="strum-wait">検索でいちばん上に出る解説ページ(楽譜の画像はAIが読みます)と、よく見られている解説動画のコメントから「${title}」の弾き方を探しています…（30秒ほど）</p>`;
   if (web.err)
     return html`<div className="strum-wait">
       <p>弾き方を探せませんでした（${web.err}）</p>

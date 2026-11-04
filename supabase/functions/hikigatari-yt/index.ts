@@ -243,13 +243,14 @@ async function krcAll(title: string, artist: string, durationMs: number) {
 }
 
 // ---------------------------------------------------------------- 弾き方(ストローク・アルペジオ)をネットから
-// 公式の弾き方は無いので、文字で書かれた弾き方を集めて、同じ形が多いものほど上にする:
-// ・解説のページやブログのストロークの矢印(↓↑)とアルペジオの弦の順番(画像で載せているページは読めない)
+// 公式の弾き方は無いので、ネットに書かれた弾き方を集める。検索でいちばん上に出る解説ページの形を先頭に、ほかは同じ形が多いものほど上:
+// ・いちばん上(と2番目)の解説ページは、楽譜の画像も Gemini に読んでもらう(キーが無ければ文字だけ)
+// ・解説のページやブログに文字で書かれたストロークの矢印(↓↑)とアルペジオの弦の順番
 // ・再生回数の多い弾き方の解説動画(ストローク・アルペジオ それぞれ4本まで)の説明と、コメント欄の書き込み
 //   (動画そのものは返さない。アプリでは集めた形を図で見せる)
-type Pat = { arrows: string; steps: string[] | null; rhythm: string; label: string; src: { name: string; url: string }[] };
+type Pat = { arrows: string; steps: string[] | null; rhythm: string; label: string; src: { name: string; url: string }[]; top?: boolean };
 
-const SKIP_HOST = /youtube\.com|youtu\.be|ufret\.jp|piascore|amazon|rakuten|twitter\.com|x\.com|instagram|tiktok|facebook|chordwiki|j-total|music\.j-total|utaten|uta-net|apple\.com|spotify|wikipedia/;
+const SKIP_HOST = /youtube\.com|youtu\.be|ufret\.jp|piascore|at-elise|print-gakufu|songsterr|kurotochord|mfmf|amazon|rakuten|twitter\.com|x\.com|instagram|tiktok|facebook|chordwiki|j-total|music\.j-total|utaten|uta-net|apple\.com|spotify|wikipedia/;
 
 async function ddg(q: string): Promise<string[]> {
   const r = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q), {
@@ -274,7 +275,16 @@ async function bing(q: string): Promise<string[]> {
   });
   if (!r.ok) throw new Error(`検索 HTTP ${r.status}`);
   const h = await r.text();
-  return [...h.matchAll(/<li class="b_algo"[\s\S]*?<h2[^>]*><a[^>]+href="(https?:[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+  return [...h.matchAll(/<li class="b_algo"[\s\S]*?<h2[^>]*><a[^>]+href="(https?:[^"]+)"/g)].map((m) => {
+    const u = m[1].replace(/&amp;/g, '&');
+    const enc = u.match(/[?&]u=a1([^&]+)/)?.[1];
+    if (!enc) return u;
+    try {
+      return atob(enc.replace(/-/g, '+').replace(/_/g, '/'));
+    } catch {
+      return u;
+    }
+  });
 }
 
 async function webSearch(q: string) {
@@ -478,7 +488,131 @@ function group(found: Found[], arp = false) {
     .map(({ views: _v, ...p }) => p);
 }
 
-// 解説ページと、再生回数の多い解説動画(説明とコメント)から、弾き方(矢印・弦の順番)を集める
+// ---- 検索でいちばん上に出る解説ページの楽譜(画像)を、Gemini に読んでもらう
+// 多くの解説ページはストロークを楽譜の画像で載せているので、文字だけでは読めない。
+// キーは同じ Supabase の中にある、あさよみ用の Gemini のキー(asayomi_secret.gemini_key)を借りる。無ければ AI は使わない
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/';
+const TEXT_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+
+async function geminiSetup() {
+  const { data } = await db.from('asayomi_secret').select('k,v').in('k', ['gemini_key', 'gemini_models']);
+  const get = (k: string) => (data || []).find((r: { k: string }) => r.k === k)?.v || '';
+  let models = TEXT_MODELS;
+  try {
+    const m = JSON.parse(get('gemini_models') || '{}');
+    if (Array.isArray(m.text) && m.text.length) models = [...new Set([...m.text.slice(0, 3), ...TEXT_MODELS])];
+  } catch {
+    // 決まった順で
+  }
+  return { key: Deno.env.get('GEMINI_API_KEY') || get('gemini_key'), models };
+}
+
+// 本文の画像(遅れて読みこむ data-src なども)。アイコン・小さい縮小版・広告は外す
+function imagesIn(h: string, base: string) {
+  const body = h.match(/<article[\s\S]*?<\/article>/i)?.[0] || h.match(/<main[\s\S]*?<\/main>/i)?.[0] || h;
+  const out: { url: string; hint: number }[] = [];
+  for (const m of body.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = m[0];
+    // 遅れて読みこむ画像は src が仮の絵なので、data-src などを先に見る
+    const src = ['data-lazy-src', 'data-src', 'data-original', 'src'].map((a) => tag.match(new RegExp(`\\s${a}=["']([^"']+)["']`, 'i'))?.[1]).find((v) => v && !v.startsWith('data:')) || '';
+    if (!src || src.startsWith('data:') || /\.svg(\?|$)|gravatar|emoji|icon|logo|avatar|banner|amazon|rakuten|\bads?\b|-\d{2,3}x\d{2,3}\.|thumb/i.test(src)) continue;
+    let url = '';
+    try {
+      url = new URL(unescape(src), base).href;
+    } catch {
+      continue;
+    }
+    if (out.some((o) => o.url === url)) continue;
+    const alt = tag.match(/\balt=["']([^"']*)["']/i)?.[1] || '';
+    const at = m.index || 0;
+    const near = body.slice(Math.max(0, at - 600), at + 200);
+    const hint = (/ストローク|リズム|パターン|弾き方|譜/.test(alt) ? 3 : 0) + (/ストローク|リズム|パターン|ダウン|アップ|ブラッシング/.test(near) ? 2 : 0) + (/アルペジオ/.test(near + alt) ? 1 : 0);
+    out.push({ url, hint });
+  }
+  return out;
+}
+
+async function imagePart(url: string) {
+  const r = await fetch(url, { headers: { 'User-Agent': UA_DESKTOP, Referer: url }, signal: AbortSignal.timeout(6000) });
+  if (!r.ok) return null;
+  const type = (r.headers.get('content-type') || '').split(';')[0].trim();
+  if (!/^image\/(jpeg|png|webp)$/.test(type)) return null;
+  const buf = new Uint8Array(await r.arrayBuffer());
+  if (buf.length < 6000 || buf.length > 1_800_000) return null; // 小さすぎるのは飾り、大きすぎるのは送らない
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return { inline_data: { mime_type: type, data: btoa(bin) } };
+}
+
+const AI_SYSTEM = [
+  'あなたはギターの先生です。渡すのは、ある曲のギターの弾き方を解説しているウェブページの文章と、そのページの画像です。',
+  'ページに書かれている(画像の楽譜・図に描かれている)ストロークのパターンとアルペジオの弦の順番を、そのまま書き写してください。自分で考えて作ってはいけません。ページに無ければ空にします。',
+  'ストロークの書き方: 1小節を16分音符16こま(4拍×4)で、拍ごとに空白で区切る。↓=ダウン、↑=アップ、×=ブラッシング(ミュート)、・=弦に当てない(空振り・のばす)。例: "↓・↓↑ ・↑↓↑ ↓・↓↑ ・↑↓↑"。',
+  '楽譜の記号の読み方: ┏┓ や ⊓ や П はダウン、V はアップ、× は ブラッシング。8分音符だけの曲は1拍を "↓・↑・" のように4こまで書く。3拍子は12こま。',
+  'アルペジオの書き方: 1小節で弾く弦の番号を順に空白で区切る。根音の弦(コードで変わる)は B。例: "B 3 2 3 1 3 2 3"。',
+  'Aメロ・サビなどで違うなら、場所ごとに分けて label に書く(最大4つ)。',
+  '答えは JSON だけ: {"stroke":[{"label":"Aメロ","arrows":"↓・↓↑ ・↑↓↑ ↓・↓↑ ・↑↓↑"}],"arpeggio":[{"label":"イントロ","strings":"B 3 2 3 1 3 2 3"}]}',
+].join('\n');
+
+// ページ(上から2つまで)の文章と画像を見せて、書いてある弾き方をもらう
+async function aiRead(pages: { url: string; html: string; text: string }[], title: string) {
+  const { key, models } = await geminiSetup();
+  if (!key || !pages.length) return null;
+  const parts: unknown[] = [];
+  for (const p of pages.slice(0, 2)) {
+    const t = p.text.replace(/\n{2,}/g, '\n');
+    const at = Math.max(0, t.search(/ストローク|リズム|弾き方/) - 300);
+    parts.push({ text: `ページ: ${p.url}\n曲: ${title}\n---\n${t.slice(at, at + 2500)}` });
+    const imgs = imagesIn(p.html, p.url)
+      .map((x, i) => ({ ...x, i }))
+      .sort((a, b) => b.hint - a.hint || a.i - b.i)
+      .slice(0, 6);
+    const got = await Promise.all(imgs.map((x) => imagePart(x.url).catch(() => null)));
+    for (const g of got) if (g) parts.push(g);
+  }
+  for (const model of models) {
+    const r = await fetch(`${GEMINI}models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: AI_SYSTEM }] },
+        contents: [{ role: 'user', parts }],
+        generationConfig: { temperature: 0, maxOutputTokens: 4096, responseMimeType: 'application/json' },
+      }),
+      signal: AbortSignal.timeout(40000),
+    }).catch(() => null);
+    if (!r) continue;
+    if (!r.ok) {
+      if (r.status === 400 || r.status === 401 || r.status === 403) return null; // キーがだめ
+      continue; // 混んでいる・そのモデルが無い → 次のモデル
+    }
+    // deno-lint-ignore no-explicit-any
+    const j: any = await r.json().catch(() => ({}));
+    // deno-lint-ignore no-explicit-any
+    const raw = (j?.candidates?.[0]?.content?.parts || []).filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join('');
+    try {
+      const o = JSON.parse(raw.replace(/^```(?:json)?|```$/g, '').trim());
+      return {
+        // deno-lint-ignore no-explicit-any
+        stroke: (Array.isArray(o.stroke) ? o.stroke : []).map((s: any) => ({ label: String(s.label || '').slice(0, 20), arrows: cleanArrows(String(s.arrows || '')) })).filter((s: { arrows: string }) => s.arrows),
+        // deno-lint-ignore no-explicit-any
+        arp: (Array.isArray(o.arpeggio) ? o.arpeggio : []).map((s: any) => ({ label: String(s.label || '').slice(0, 20), strings: String(s.strings || '').replace(/[^1-6B ]/g, ' ').replace(/\s+/g, ' ').trim() })).filter((s: { strings: string }) => s.strings.split(' ').length >= 3),
+      };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// AI の答えの矢印を、アプリの書き方(↓↑×・と空白)にそろえる
+function cleanArrows(s: string) {
+  const a = s.replace(/[xX✕✖]/g, '×').replace(/[〜~～ー_\-]/g, '・').replace(/[^↓↑×・\s]/g, '').replace(/\s+/g, ' ').trim();
+  return (a.match(/[↓↑]/g) || []).length >= 2 ? a : '';
+}
+
+// 解説ページと、再生回数の多い解説動画(説明とコメント)から、弾き方(矢印・弦の順番)を集める。
+// 検索でいちばん上に出る解説ページの弾き方(画像の楽譜は AI が読む)を先頭に、ほかは同じ形が多い順
 async function strumFind(title: string, artist: string) {
   const t = baseTitle(title);
   const ft = fold(t);
@@ -494,13 +628,14 @@ async function strumFind(title: string, artist: string) {
   const [stroke, arp, urlsA, urlsB] = await Promise.all([
     vids(`${artist} ${t} ギター 弾き方 ストローク`, (s) => !/アルペジオ|指弾き/.test(s) || /ストローク/.test(s)),
     vids(`${artist} ${t} ギター アルペジオ 弾き方`, (s) => /アルペジオ|指弾き|arpeggio/i.test(s)),
-    webSearch(`${t} ${artist} ギター ストローク パターン`),
-    webSearch(`${t} ${artist} ギター 弾き方 ストローク 矢印`),
+    webSearch(`${t} ストローク`), // 人がふつうに調べる言葉(いちばん上の解説ページを見つける)
+    webSearch(`${t} ${artist} ギター 弾き方 ストローク`),
   ]);
 
-  const urls = [...new Set([...urlsA.slice(0, 6), ...urlsB.slice(0, 4)])].filter((u) => !SKIP_HOST.test(hostOf(u))).slice(0, 8);
+  const urls = [...new Set([...urlsA.slice(0, 7), ...urlsB.slice(0, 5)])].filter((u) => !SKIP_HOST.test(hostOf(u))).slice(0, 8);
   const found: Found[] = [];
   const arps: Found[] = [];
+  const pages: { url: string; html: string; text: string; rank: number }[] = [];
   const times = (n = 0) => (n >= 1e4 ? `再生${Math.round(n / 1e4)}万回` : n ? `再生${n}回` : '');
   const fromVideo = async (v: YtHit, kind: 'stroke' | 'arp') => {
     const url = `https://www.youtube.com/watch?v=${v.id}`;
@@ -513,12 +648,13 @@ async function strumFind(title: string, artist: string) {
     }
   };
   await Promise.all([
-    ...urls.map(async (u) => {
+    ...urls.map(async (u, rank) => {
       try {
         const h = await getText(u);
         const ttl = unescape(h.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
         if (!about(ttl)) return; // ほかの曲のページ
         const tx = pageText(h);
+        pages.push({ url: u, html: h, text: tx, rank });
         for (const a of arrowsIn(tx).slice(0, 6)) found.push({ ...a, name: hostOf(u), url: u, views: 0 });
         for (const a of arpIn(tx).slice(0, 3)) arps.push({ arrows: a, rhythm: '', label: '', name: hostOf(u), url: u, views: 0 });
       } catch {
@@ -528,9 +664,29 @@ async function strumFind(title: string, artist: string) {
     ...stroke.map((v) => fromVideo(v, 'stroke').catch(() => {})),
     ...arp.slice(0, 3).map((v) => fromVideo(v, 'arp').catch(() => {})),
   ]);
+
+  // いちばん上の解説ページ(と2番目)を AI に読んでもらう
+  pages.sort((a, b) => a.rank - b.rank);
+  const top = pages.slice(0, 2);
+  const ai = await aiRead(top, `${t}${artist ? ` / ${artist}` : ''}`).catch(() => null);
+  const src = top.map((p) => ({ name: `${hostOf(p.url)}（検索でいちばん上のページ）`, url: p.url }));
+  const first = src[0] ? [src[0]] : [];
+  const topPats: Pat[] = (ai?.stroke || []).slice(0, 4).map((s) => ({ arrows: s.arrows, steps: stepsOf(s.arrows), rhythm: '', label: s.label, src: first, top: true }));
+  const topArps: Pat[] = (ai?.arp || []).slice(0, 3).map((s) => ({ arrows: s.strings, steps: s.strings.split(' '), rhythm: '', label: s.label, src: first, top: true }));
+  const same = (a: string, b: string) => a.replace(/\s/g, '') === b.replace(/\s/g, '');
+  const rest = group(found).filter((p) => !topPats.some((q) => same(q.arrows, p.arrows)));
+  const restArps = group(arps, true).filter((p) => !topArps.some((q) => same(q.arrows, p.arrows)));
+
   // 解説動画の題名にある「16ビート」「8ビート」(矢印が見つからないときの手がかり)
   const bt = [...stroke, ...arp].map((v) => v.title.normalize('NFKC').match(/(16|8)\s*ビート/)?.[1]).find(Boolean) || '';
-  return { patterns: group(found), arps: group(arps, true).slice(0, 3), beat: bt, looked: stroke.length + arp.length + urls.length };
+  return {
+    patterns: [...topPats, ...rest].slice(0, 6),
+    arps: [...topArps, ...restArps].slice(0, 3),
+    beat: bt,
+    top: top[0] ? { name: hostOf(top[0].url), url: top[0].url } : null,
+    ai: ai ? 'ok' : 'none',
+    looked: stroke.length + arp.length + urls.length,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -554,7 +710,7 @@ Deno.serve(async (req) => {
     }
     if (body.action === 'strum_find') {
       if (!title) return json({ patterns: [], arps: [], beat: '' });
-      const ck = `strum2:${norm(`${artist} ${baseTitle(title)}`)}`;
+      const ck = `strum3:${norm(`${artist} ${baseTitle(title)}`)}`;
       if (!body.force) {
         const { data } = await db.from('hikigatari_sheet_cache').select('data,fetched_at').eq('key', ck).maybeSingle();
         if (data && Date.now() - new Date(data.fetched_at).getTime() < TTL_MS) return json({ ...data.data, cached: true });
