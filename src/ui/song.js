@@ -546,6 +546,27 @@ function SongReady({ song, reload }) {
   // スタート前のカウント(4・3・2・1)は、メトロノームを鳴らしているときだけ。鳴らしていないときは、押したらすぐ流れる
   const clickOn = !!(st.click ?? prefs.click);
   const scroll = useAutoScroll({ scrollRef, lines: parsed.lines, bpm, barsPerLine, beatsPerBar, countIn: prefs.countIn && clickOn, click: clickOn, durationMs: song.durationMs, fitSong, clock, clickVolume: prefs.clickVolume ?? 1, speed });
+  // 流している間だけ、譜面の下に余白をつける(最後の方の行も画面の真ん中まで上がれるように。
+  // 余白が無いと、最後の半画面ぶんはスクロールも、行を押して寄せるのも止まってしまう)。
+  // 止めたら、最後の行が画面のいちばん下に来るところまで戻してから余白を外す
+  useLayoutEffect(() => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    if (scroll.playing) {
+      sc.classList.add('is-playing');
+      return;
+    }
+    if (!sc.classList.contains('is-playing')) return;
+    const pad = parseFloat(getComputedStyle(sc.firstElementChild).paddingBottom) || 0;
+    const plain = sc.scrollHeight - sc.clientHeight - pad + 14;
+    if (sc.scrollTop <= plain) {
+      sc.classList.remove('is-playing');
+      return;
+    }
+    glideTo(sc, plain, 500);
+    const t = setTimeout(() => sc.classList.remove('is-playing'), 560);
+    return () => clearTimeout(t);
+  }, [scroll.playing]);
   scrollApi.current = scroll;
   // 原曲を流しに Apple Music へ。流れている譜面は止めておく(戻ってきたら ▶ で続きから)
   const onApple = () => {
