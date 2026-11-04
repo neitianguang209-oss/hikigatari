@@ -1034,7 +1034,7 @@ function SongReady({ song, reload }) {
   useEffect(() => {
     if (!easyToggled.current) return;
     easyToggled.current = false;
-    if (!easy) toast('教本どおりの押さえ方にしました');
+    if (!easy) toast('U-FRET と同じ押さえ方にしました');
     else if (!eased.length) toast('この曲は、もとから押さえやすいコードばかりです');
     else {
       const say = eased.slice(0, 2).map((e) => (e.kind === 'name' ? `${pretty(e.from)}→${pretty(e.to)}` : `${pretty(e.from)}は${e.kind === 'short' ? '省略形' : '押さえやすい形'}`));
@@ -1084,8 +1084,8 @@ function SongReady({ song, reload }) {
         <span className="lbl-short">${transpose === 0 ? 'キー' : `キー ${signed(transpose)}`}</span>
       </button>
       ${instrument === 'guitar'
-        ? html`<button className=${cx('chip mode-chip', easy && 'is-on')} aria-pressed=${easy} onClick=${toggleEasy} aria-label=${easy ? '押さえ方: かんたん（押すと教本どおり）' : '押さえ方: 教本どおり（押すとかんたん）'}>
-            <span className="lbl-long">${easy ? 'かんたん' : '教本どおり'}</span>
+        ? html`<button className=${cx('chip mode-chip', easy && 'is-on')} aria-pressed=${easy} onClick=${toggleEasy} aria-label=${easy ? '押さえ方: かんたん（押すと U-FRET と同じ形）' : '押さえ方: U-FRET と同じ形（押すとかんたん）'}>
+            <span className="lbl-long">${easy ? 'かんたん' : 'U-FRETの形'}</span>
             <span className="lbl-short">${easy ? '簡単' : '教本'}</span>
           </button>`
         : null}
@@ -1777,14 +1777,14 @@ function CapoPanel({ open, onClose, rank, capo, auto, setSt, stats, sounding, ea
         value=${easy ? 'easy' : 'normal'}
         onChange=${(v) => setSt({ easy: v === 'easy' })}
         options=${[
-          { value: 'normal', label: '通常（教本どおり）' },
+          { value: 'normal', label: '通常（U-FRET と同じ形）' },
           { value: 'easy', label: 'かんたん' },
         ]}
       />
       <p className="mode-note">
         ${easy
           ? 'バレーコードなど、つっかえやすいところを省略形や響きの近いコードに置き換え、前後のコードへの持ちかえが少ない形を選んでいます。'
-          : 'F や B もバレーコードのまま、教本どおりの押さえ方で出します。弾けるようになりたい形を、そのまま練習できます。'}
+          : 'U-FRET と同じ押さえ方で出します（F や B はバレーコードのまま）。弾けるようになりたい形を、そのまま練習できます。'}
       </p>
       ${easy
         ? eased.length
@@ -2258,7 +2258,7 @@ function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, sh
     const f = v.frets.join(',');
     if (cur[name] === f) {
       delete cur[name];
-      toast(easy ? 'かんたんモードの形に戻しました' : '教本どおりの形に戻しました');
+      toast(easy ? 'かんたんモードの形に戻しました' : 'U-FRET と同じ形に戻しました');
     } else {
       cur[name] = f;
       toast(`${pretty(name)} はいつもこの形で出します`);
@@ -2283,7 +2283,7 @@ function ChordPanel({ tap, info, onClose, instrument, noteStyle, flat, picks, sh
         : isShown && easy
           ? 'かんたんモードで出している形'
           : v.standard
-            ? '標準の形（教本どおり）'
+            ? '標準の形（U-FRET と同じ）'
             : v === guitarVoicings(name)[0]
               ? 'いちばんやさしい形'
               : 'ほかの押さえ方';

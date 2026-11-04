@@ -1,5 +1,6 @@
 // ギター: 押さえ方(ボイシング)の算出・難しさの点数・カポ位置の最適化・かんたんコード化
 import { parseChord, chordIntervals, chordName, noteName, keyPrefersFlat, shiftKey } from './chord.js';
+import { UFRET_SHAPES } from './ufret-shapes.js';
 
 const TUNING = [40, 45, 50, 55, 59, 64]; // 6弦 → 1弦 (E A D G B E)
 const mod12 = (n) => ((n % 12) + 12) % 12;
@@ -116,13 +117,19 @@ let curatedMap = null;
 function curated() {
   if (curatedMap) return curatedMap;
   curatedMap = new Map();
-  for (const [name, frets, fingers] of CURATED) {
+  // いちばん先に U-FRET の形(標準の形)。教本の形と同じなら、その指番号を使う
+  const known = new Map(CURATED.map(([, fr, fg]) => [fr, fg]));
+  const list = [...Object.entries(UFRET_SHAPES).map(([n, fr]) => [n, fr, known.get(fr) || null, true]), ...CURATED];
+  for (const [name, frets, fingers, ufret] of list) {
     const ch = parseChord(name);
     const sig = signature(ch);
+    if (!ch) continue;
+    // フレットは1文字ずつ(10 フレット以上は a=10, b=11 …)
     const v = makeVoicing(
-      [...frets].map((c) => (c === 'x' ? -1 : Number(c))),
-      [...fingers].map((c) => (c === 'x' || c === '0' ? 0 : c === 'T' ? 'T' : Number(c))),
+      [...frets].map((c) => (c === 'x' ? -1 : parseInt(c, 36))),
+      fingers ? [...fingers].map((c) => (c === 'x' || c === '0' ? 0 : c === 'T' ? 'T' : Number(c))) : null,
     );
+    if (ufret) v.ufret = true;
     if (!curatedMap.has(sig)) curatedMap.set(sig, []);
     curatedMap.get(sig).push(v);
   }
