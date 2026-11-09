@@ -5330,3 +5330,12 @@ body:has(.rec-dock) .toast-host {
 .tn-mode.is-on {
   color: var(--text);
 }
+
+/* あさよみで聞いていた話を思考メモへ */
+.asn { display: grid; gap: 14px; padding-bottom: 8px; }
+.asn-item { display: grid; gap: 8px; padding: 14px; border-radius: 14px; background: var(--accent-soft); }
+.asn-item:not(.is-main) { background: transparent; border: 1px solid var(--line, rgba(127,127,127,.25)); }
+.asn-label { font-size: 12.5px; opacity: .75; }
+.asn-title { font-size: 17px; font-weight: 700; line-height: 1.45; }
+.asn-item.is-main .btn { width: 100%; min-height: 56px; font-size: 17px; }
+.asn-close { justify-self: center; }

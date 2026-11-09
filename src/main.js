@@ -17,6 +17,7 @@ import { VoiceFx } from './ui/voicefx.js';
 import { Welcome } from './ui/welcome.js';
 import { ToastHost, Spinner, toast } from './ui/common.js';
 import { autoClean } from './lib/mediastore.js';
+import { AsayomiNow } from './ui/asayomi.js';
 const html = htm.bind(React.createElement);
 
 // ショートカットから ?np=曲名%0Aアーティスト / ?am=AppleMusicのURL / ?q=検索語 で開かれたら、#/open に付け替える
@@ -68,7 +69,7 @@ function App() {
   };
 
   // まだどの端末ともつないでいない(端末内にも曲が無い)ときは、はじめの画面
-  if (!paired && !lib.all().length) return html`<${Welcome} onDone=${onPaired} /><${ToastHost} />`;
+  if (!paired && !lib.all().length) return html`<${Welcome} onDone=${onPaired} /><${AsayomiNow} /><${ToastHost} />`;
 
   const { path, params } = route;
   let page;
@@ -101,6 +102,7 @@ function App() {
           <button className="btn btn-sm" onClick=${() => location.reload()}>更新する</button>
         </div>`
       : null}
+    <${AsayomiNow} />
     <${ToastHost} />
   </${React.Fragment}>`;
 }
