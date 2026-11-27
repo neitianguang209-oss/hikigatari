@@ -18,7 +18,10 @@ async function rpc(name, body) {
   const t = setTimeout(() => ctl.abort(), 8000);
   try {
     const res = await fetch(SB_URL + '/rest/v1/rpc/' + name, { method: 'POST', headers: HEAD, body: JSON.stringify(body || {}), signal: ctl.signal });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(text.includes('bad key') ? 'bad key' : 'HTTP ' + res.status);
+    }
     return await res.json();
   } finally {
     clearTimeout(t);
@@ -28,10 +31,38 @@ const todayJST = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 
 const seenGet = () => { try { return localStorage.getItem(SEEN) || ''; } catch (e) { return ''; } };
 const seenSet = (v) => { try { localStorage.setItem(SEEN, v); } catch (e) { /* 保存できない端末 */ } };
 
+// 日記は合言葉で守っている。この端末で初めてなら聞いて覚える
+const PASS_KEY = 'jibun-note:key';
+function getPass() {
+  try { return localStorage.getItem(PASS_KEY) || ''; } catch (e) { return ''; }
+}
+function askPass(msg) {
+  const v = (window.prompt(msg || '合言葉を入れてください(家計簿・就活アプリと同じ。合言葉入りのリンクを貼ってもOK)') || '').trim();
+  if (!v) return '';
+  const m = v.match(/[#&]k=([^&\s]+)/);
+  let key = v;
+  if (m) { try { key = decodeURIComponent(m[1]); } catch (e) { key = m[1]; } }
+  try { localStorage.setItem(PASS_KEY, key); } catch (e) { /* 保存できない端末 */ }
+  return key;
+}
+// ボタンを押して送るとき用。合言葉が無ければ聞き、ちがえばもう一度だけ聞く
+async function rpcPass(name, body) {
+  let key = getPass() || askPass();
+  if (!key) throw new Error('nokey');
+  try {
+    return await rpc(name, { p_key: key, ...body });
+  } catch (e) {
+    if (e.message !== 'bad key') throw e;
+    key = askPass('合言葉がちがうようです。もう一度入れてください');
+    if (!key) throw new Error('nokey');
+    return rpc(name, { p_key: key, ...body });
+  }
+}
+
 // 思考メモ本体と同じ入口。ID は記事ごとに固定なので、あさよみから送った分と重ならない(2回押しても増えない)
 async function saveMemo(item, tag) {
   const now = new Date().toISOString();
-  const res = await rpc('shikou_memo_sync', {
+  const res = await rpcPass('shikou_memo_sync', {
     p_changes: [{
       id: item.id, kind: 'note', deleted: false, updatedAt: now,
       data: { id: item.id, body: item.body, tagIds: tag ? [tag] : [], dateKey: todayJST(), createdAt: now, updatedAt: now },
