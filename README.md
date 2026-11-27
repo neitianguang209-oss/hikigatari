@@ -91,7 +91,7 @@ PC・iPad のキーボードやフットペダル: スペース＝自動スク�
 | `supabase/functions/hikigatari-yt/index.ts` | Edge Function(小さい別の関数)。曲と合わせる動画を探す。本体と同じ端末の鍵で守る(`verify_jwt: false`) |
 | `supabase/functions/hikigatari-audio/index.ts` | Edge Function(小さい別の関数)。自分の音源を置く非公開のバケット `hikigatari-audio`(1曲 40MB まで・audio/* と mp4/mov だけ・ポリシー無し=直接は読めない)へ、入れる用・取り出す用の期限つき URL を渡す(`put`・`get`・`del`・`usage`)。本体と同じ端末の鍵で守る(`verify_jwt: false`) |
 | `sw.js` | オフライン用。**更新して公開するたびに `CACHE_NAME` の番号を上げる** |
-| `icons/icon.svg` | アイコンの元絵(夜の丘で、月を背にギターを弾き語りする人)。PNG は `powershell -ExecutionPolicy Bypass -File icons/render-icons.ps1` で作る(Edge で描いて縮小) |
+| `icons/source-kaeru.png` | アイコンの元絵(ギターを弾くかえる)。PNG は `C:\ProgramData\anaconda3\python.exe -I icons\make-icons.py` で作る(地をベージュに塗り替えて縮小) |
 
 ### Supabase（プロジェクト `gzayrjlhruhvklsidraw` に相乗り）
 

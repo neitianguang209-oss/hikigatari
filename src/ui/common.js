@@ -144,8 +144,10 @@ export function Artwork({ song, size = 48 }) {
   const url = song.artwork && !broken ? artworkUrl(song.artwork, size > 60 ? 300 : 120) : null;
   if (url)
     return html`<img className="artwork" src=${url} width=${size} height=${size} alt="" loading="lazy" onError=${() => setBroken(true)} />`;
-  const ch = (song.title || '♪').trim().slice(0, 1);
-  return html`<div className="artwork artwork-tile" style=${{ width: size, height: size, background: tileColor(song.title), fontSize: size * 0.42 }}>${ch}</div>`;
+  // ジャケットが無い曲は、アーティスト名(無ければ曲名)の頭文字のタイル
+  const name = (song.artist || song.title || '♪').trim();
+  const ch = String.fromCodePoint(name.codePointAt(0) || 9834).toUpperCase();
+  return html`<div className="artwork artwork-tile" style=${{ width: size, height: size, background: tileColor(name), fontSize: size * 0.42 }} aria-hidden="true">${ch}</div>`;
 }
 
 // コード名の ♯ ♭ だけ字形をそろえる(欧文フォントに無く、すき間が空いて見えるため)

@@ -261,11 +261,15 @@ export function detectKey(chordList) {
     list.forEach((ch, idx) => {
       const rel = mod12(ch.root - tonic);
       const q = quality(ch);
-      const w = idx === 0 || idx === list.length - 1 ? 2.5 : 1;
-      if (rel in DEG) s += w * (DEG[rel] === q || (q === 'o' && DEG[rel] !== 'd') ? 2 : 1);
-      else s -= w * 1.5;
-      if (rel === 0 && q === 'M') s += w * 0.8;
+      // 最初と最後は少し重く(重くしすぎると、IV で始まる曲を IV の調と取り違える)
+      const w = idx === 0 || idx === list.length - 1 ? 1.5 : 1;
+      // 音階の中で長短も合えば加点。根音だけ合う(IIの長三和音など)は0点、音階の外は減点
+      if (rel in DEG) s += w * (DEG[rel] === q || (q === 'o' && DEG[rel] !== 'd') ? 2 : 0);
+      else s -= w;
       if (rel === 7 && ch.st.seventh === 10) s += 0.6;
+      // V → I の終止
+      const next = list[idx + 1];
+      if (next && rel === 7 && q !== 'm' && mod12(next.root - tonic) === 0) s += 1;
     });
     if (!best || s > best.s) best = { s, tonic };
   }

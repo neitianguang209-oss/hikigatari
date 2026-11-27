@@ -19,7 +19,7 @@ import { TunerSheet, prepareTuner } from './tuner.js';
 import { StrumCard } from './strum.js';
 import { audioCtx, holdPlayback, releasePlayback, click as clickSound } from '../lib/sound.js';
 import { parseSheet, chordStats } from '../music/sheet.js';
-import { parseChord, chordName, pretty, parseKey, detectKey, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
+import { parseChord, chordName, pretty, keyName, shiftKey, keyPrefersFlat, solfege, noteName } from '../music/chord.js';
 import { rankCapos, shapeName, easyName, guitarVoicings, standardVoicing, planVoicings, voicingDifficulty, difficultyLabel, fingerSteps, pressTips, nearChords } from '../music/guitar.js';
 import { pianoVoicing, spelledNamer } from '../music/piano.js';
 import { detectModulation } from '../music/modulation.js';
@@ -27,7 +27,8 @@ import { lib, useSong, media, local } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { usePrefs, getPrefs, setPrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, sourceName, norm, baseTitle, sameArtist, signed, appleUrlOf } from '../lib/util.js';
+import { cx, sourceName, norm, baseTitle, sameArtist, signed, appleUrlOf, titleNote } from '../lib/util.js';
+import { songOrigKey, keyCode, sheetKey } from '../music/songkey.js';
 const html = htm.bind(React.createElement);
 
 // ---------------------------------------------------------------- 入口: 譜面の読み込み
@@ -53,7 +54,7 @@ export function SongPage({ id }) {
         const parsed = parseSheet(conv.text);
         if (!parsed.lines.some((l) => l.segs && l.segs.some((s) => s.c))) throw Object.assign(new Error('譜面にコードが見つかりませんでした'), { status: 404 });
         await lib.patch(id, {
-          sheet: { text: conv.text, key: conv.key || parsed.meta.key || null, bpm: conv.bpm || parsed.meta.bpm || null, beatsPerBar: parsed.meta.beatsPerBar || 4, fetchedAt: r.fetchedAt || new Date().toISOString() },
+          sheet: { text: conv.text, ...sheetKey(parsed, conv.key), bpm: conv.bpm || parsed.meta.bpm || null, beatsPerBar: parsed.meta.beatsPerBar || 4, fetchedAt: r.fetchedAt || new Date().toISOString() },
           sourceUrl: r.url || cur.sourceUrl,
           edited: false,
         });
@@ -123,7 +124,7 @@ function TopBar({ song, onMore, onApple, onMusic = null, musicOn = false }) {
   return html`<header className="song-top">
     <button className="icon-btn" onClick=${() => back('/')} aria-label="戻る"><${Icon} name="back" /></button>
     <div className="song-title">
-      <div className="t">${song.title || '無題'}</div>
+      <div className="t">${song.title || '無題'}${titleNote(song) ? html`<span className="title-note">${titleNote(song)}</span>` : null}</div>
       <div className="a">${song.artist || ''}</div>
     </div>
     ${onMusic
@@ -164,13 +165,7 @@ function SongReady({ song, reload }) {
 
   const parsed = useMemo(() => parseSheet(song.sheet.text), [song.sheet.text]);
   const stats = useMemo(() => chordStats(parsed.lines), [parsed]);
-  const origKey = useMemo(() => {
-    const k = parseKey(song.sheet.key || parsed.meta.key);
-    if (k) return k;
-    const seq = [];
-    for (const l of parsed.lines) if (l.segs) for (const s of l.segs) if (s.c) seq.push(s.c);
-    return detectKey(seq);
-  }, [parsed, song.sheet.key]);
+  const { key: origKey, guessed: keyGuessed } = useMemo(() => songOrigKey(song, parsed), [parsed, song.sheet.key, song.sheet.keyAuto, st.origKey]);
   const soundKey = shiftKey(origKey, transpose);
   const soundFlat = keyPrefersFlat(soundKey);
 
@@ -773,7 +768,8 @@ function SongReady({ song, reload }) {
   // 1曲に1回だけ(結果は曲に覚えて、ほかの端末にも同期)。測れなかったら3日後にもう一度
   useEffect(() => {
     if (st.bpm || sheetBpm || song.tempo || !song.title) return;
-    if (song.tempoTriedAt && Date.now() - song.tempoTriedAt < 3 * 864e5) return;
+    // tempoV: 測り方の版。版が上がったら、前に測れなかった曲ももう一度ためす
+    if (song.tempoV === 2 && song.tempoTriedAt && Date.now() - song.tempoTriedAt < 3 * 864e5) return;
     let alive = true;
     (async () => {
       let tempo = null;
@@ -783,11 +779,12 @@ function SongReady({ song, reload }) {
           const buf = await decodeAudio(await (await fetch(it.previewUrl)).arrayBuffer());
           if (!alive) return;
           const t = await detectTempo(await toMonoHQ(buf));
-          if (t && t.conf >= 1.4) tempo = { bpm: t.bpm, conf: t.conf, from: 'preview' };
+          // 手ごたえが弱くても空欄にはせず、「あやしい」印をつけて入れる
+          if (t && t.bpm) tempo = { bpm: t.bpm, conf: t.conf, from: 'preview', ...(t.conf >= 1.4 ? {} : { low: true }) };
         }
       } catch {}
       if (!alive) return;
-      await lib.patch(song.id, tempo ? { tempo, tempoTriedAt: Date.now() } : { tempoTriedAt: Date.now() });
+      await lib.patch(song.id, { ...(tempo ? { tempo } : {}), tempoTriedAt: Date.now(), tempoV: 2 });
     })();
     return () => {
       alive = false;
@@ -1124,8 +1121,8 @@ function SongReady({ song, reload }) {
                   : html`<b>Key ${keyName(soundKey)}</b>`}
               </div>
               <div className="muted small">
-                原曲キー ${keyName(origKey)}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmFrom === 'auto' || bpmFrom === 'len' ? '(推定)' : bpmKnown ? '' : '(仮)'} ・ ${song.sourceUrl
-                  ? html`<a href=${song.sourceUrl} target="_blank" rel="noopener" className="link">出典: ${sourceName(song.source)}${song.sourceLabel ? `（${song.sourceLabel}）` : ''}</a>`
+                原曲キー ${keyName(origKey)}${keyGuessed ? '(推定)' : ''}${transpose ? ` → ${keyName(soundKey)}` : ''}${hasMod ? ` ・ 転調あり${follow ? '（カポを付けかえ）' : ''}` : ''} ・ ♩=${bpm}${bpmFrom === 'auto' && song.tempo?.low ? '(推定・あやしい)' : bpmFrom === 'auto' || bpmFrom === 'len' ? '(推定)' : bpmKnown ? '' : '(仮)'} ・ ${song.sourceUrl
+                  ? html`<a href=${song.sourceUrl} target="_blank" rel="noopener" className="link">出典: ${sourceName(song.source)}</a>`
                   : sourceName(song.source)}${song.edited ? '(編集済み)' : ''}
               </div>
             </div>
@@ -1231,6 +1228,7 @@ function SongReady({ song, reload }) {
       onClose=${() => setPanel(null)}
       transpose=${transpose}
       origKey=${origKey}
+      keyGuessed=${keyGuessed}
       setSt=${setSt}
       instrument=${instrument}
       song=${song}
@@ -1878,7 +1876,7 @@ export function songMarks(lines) {
   return { start: start >= 0 ? start : null, chorus: chorus >= 0 ? chorus : null, bridge: bridge >= 0 ? bridge : null, sure };
 }
 
-function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, own, mine, marks, voice, setVoice, how, setHow, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
+function KeyPanel({ open, onClose, transpose, origKey, keyGuessed, setSt, instrument, song, own, mine, marks, voice, setVoice, how, setHow, onPickOwn, onUseOwn, onPlayFull, onBeforePreview, onApple }) {
   return html`<${Sheet} open=${open} onClose=${onClose} title="キー（曲の高さ）">
     <p className="panel-lead">自分の声に合わせて曲全体の高さを変えます。${instrument === 'guitar' ? 'ギターのカポ位置も自動で選び直します。' : ''}</p>
     <div className="key-big">
@@ -1889,6 +1887,17 @@ function KeyPanel({ open, onClose, transpose, origKey, setSt, instrument, song, 
     <div className="row-gap center">
       <button className="btn" disabled=${transpose === 0} onClick=${() => setSt({ transpose: 0 })}>原曲キーに戻す</button>
     </div>
+    <label className="orig-key">
+      <span>原曲キーがちがうときは直す</span>
+      <select value=${song.settings?.origKey || ''} onChange=${(e) => setSt({ origKey: e.target.value || null })}>
+        <option value="">${song.settings?.origKey ? '自動に戻す' : `${keyName(origKey)}（${keyGuessed ? '推定' : '譜面のキー'}）`}</option>
+        ${[false, true].map(
+          (minor) => html`<optgroup key=${String(minor)} label=${minor ? '短調（マイナー）' : '長調（メジャー）'}>
+            ${Array.from({ length: 12 }, (_, pc) => ({ pc, minor })).map((k) => html`<option key=${k.pc} value=${keyCode(k)}>${keyName(k)}</option>`)}
+          </optgroup>`,
+        )}
+      </select>
+    </label>
     <${KeyHear}
       songId=${song.id}
       active=${open}
@@ -2080,7 +2089,16 @@ async function appleTrackOf(song) {
   }
   const q = `${baseTitle(song.title)} ${song.artist || ''}`.trim();
   const j = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&country=jp&entity=song&limit=10&lang=ja_jp`)).json();
-  return (j.results || []).find((x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist))) || null;
+  const same = (x) => norm(baseTitle(x.trackName)) === norm(baseTitle(song.title)) && (!song.artist || sameArtist(x.artistName, song.artist));
+  const hit = (j.results || []).find(same);
+  if (hit || !song.artist) return hit || null;
+  // 曲名とアーティストで出ないときは、曲名だけ・米国の店でも探す(海外の曲向け)
+  for (const country of ['jp', 'us']) {
+    const k = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(baseTitle(song.title))}&country=${country}&entity=song&limit=50`)).json();
+    const h = (k.results || []).find(same);
+    if (h) return country === 'jp' ? h : { ...h, trackId: null, trackViewUrl: '' }; // 米国の曲番号は日本の店では使えない
+  }
+  return null;
 }
 
 // 原曲を Apple Music で開く(曲が特定できていればその曲、分からなければ検索)

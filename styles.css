@@ -27,7 +27,8 @@
   --shadow-lg: 0 10px 40px rgba(30, 20, 10, 0.18);
   --radius: 14px;
   --font: system-ui, -apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic UI', Meiryo, sans-serif;
-  --chord-font: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Segoe UI', Roboto, Arial, var(--font);
+  /* 譜面の3要素(コード・数字・歌詞)は同じ書体で、太さだけ変える: 歌詞 500・コード 600・数字 700 */
+  --chord-font: 'Noto Sans JP', var(--font);
   --lyric-font: 'Noto Sans JP', var(--font); /* 歌詞は少し太め(中くらいの太さ)で読みやすく */
   color-scheme: light;
 }
@@ -1306,7 +1307,7 @@ textarea {
 }
 .gd-finger {
   fill: var(--on-accent);
-  font: 700 7px var(--font);
+  font: 700 7px var(--chord-font);
 }
 .gd-open {
   fill: none;
@@ -1321,7 +1322,7 @@ textarea {
 /* 何フレットめかの数字(セーハで上のほうを押さえる形)。歌詞の上の小さい図でも読めるよう、大きく・太く・はっきりした色で */
 .gd-frlabel {
   fill: var(--text);
-  font: 700 11px var(--font);
+  font: 700 11px var(--chord-font);
 }
 .gdiagram.is-compact .gd-frlabel {
   font-size: 18px;
@@ -1358,7 +1359,7 @@ textarea {
   fill: var(--accent-2);
 }
 .kb-label {
-  font: 700 4.6px var(--font);
+  font: 700 4.6px var(--chord-font);
   fill: #fff;
 }
 .kb-label-b {
@@ -1611,7 +1612,7 @@ textarea {
   gap: 2px;
 }
 .capo-name em {
-  font: 700 0.62rem var(--font);
+  font: 700 0.62rem var(--chord-font);
   font-style: normal;
   color: var(--on-accent);
   background: var(--accent);
@@ -2157,7 +2158,7 @@ code {
   stroke-width: 1.7;
 }
 .st-acc {
-  font: 700 10.5px var(--font);
+  font: 700 10.5px var(--chord-font);
   fill: var(--text);
 }
 .chord-detail-staff {
@@ -2801,7 +2802,7 @@ html,
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font: 700 0.72rem/1.6 var(--font);
+  font: 700 0.72rem/1.6 var(--chord-font);
   vertical-align: 0.15em;
   cursor: pointer;
 }
@@ -3111,7 +3112,7 @@ html,
   position: absolute;
   top: 3px;
   left: 6px;
-  font: 600 0.62rem var(--font);
+  font: 600 0.62rem var(--chord-font);
   color: var(--muted);
 }
 .ear-bar.is-now {
@@ -5339,3 +5340,68 @@ body:has(.rec-dock) .toast-host {
 .asn-title { font-size: 17px; font-weight: 700; line-height: 1.45; }
 .asn-item.is-main .btn { width: 100%; min-height: 56px; font-size: 17px; }
 .asn-close { justify-self: center; }
+
+/* ---------------------------------------------------------------- 数字の幅をそろえる・曲名の注記・アーティスト名・キー */
+.tempo-num,
+.step-value,
+.key-now,
+.sheet-meta,
+.song-row-tags {
+  font-variant-numeric: tabular-nums;
+}
+.tempo-num,
+.step-value {
+  font-family: var(--chord-font);
+  font-weight: 700;
+}
+.title-note {
+  margin-left: 6px;
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--muted);
+}
+.song-row-artist {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.song-row-artist.is-twin {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-radius: 6px;
+  padding: 0 6px;
+}
+.key-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.key-filter .chip {
+  font-family: var(--chord-font);
+}
+.key-count {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.orig-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.orig-key select {
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: 600 16px var(--chord-font);
+}
+

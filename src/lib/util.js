@@ -96,11 +96,22 @@ export function artworkUrl(url, size = 200) {
   return url.replace(/\/\d+x\d+bb\./, `/${size}x${size}bb.`);
 }
 
-// 曲名から、ジャケットが無いとき用の色を決める
+// ジャケットが無いとき用の、くすんだ単色(名前ごとに同じ色)
+const TILE_COLORS = ['#8a9a7b', '#7f93a8', '#a88b7a', '#9a86a0', '#b0926a', '#739a98', '#a67f86', '#848a9c'];
 export function tileColor(s) {
   let h = 0;
-  for (const c of s || '') h = (h * 31 + c.charCodeAt(0)) % 360;
-  return `hsl(${h} 45% 52%)`;
+  for (const c of norm(s)) h = (h * 31 + c.codePointAt(0)) % 100003;
+  return TILE_COLORS[h % TILE_COLORS.length];
+}
+
+// 取り込み元が版に付けた注記(弾き語りver.・feat.〇〇・読みがな・初心者ver)。出典の欄ではなく曲名の横に出す
+export function titleNote(song) {
+  return String(song?.sourceLabel || '')
+    .split('・動画あり')
+    .join('')
+    .replace(/^動画あり・?/, '')
+    .trim()
+    .replace(/^[(（]([^()（）]*)[)）]/, '$1');
 }
 
 export function downloadFile(name, text, type = 'application/json') {

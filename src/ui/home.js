@@ -7,9 +7,11 @@ import { lib, useLibrary, useSyncState } from '../lib/store.js';
 import { api, apiRetry, lookupAppleMusic } from '../lib/api.js';
 import { usePrefs } from '../lib/prefs.js';
 import { go, back } from '../lib/router.js';
-import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed, artworkUrl, tileColor } from '../lib/util.js';
+import { cx, norm, songIdFor, sourceName, formatAgo, baseTitle, sameArtist, signed, artworkUrl, tileColor, titleNote } from '../lib/util.js';
 import { TunerSheet, prepareTuner } from './tuner.js';
 import { checkWatched } from '../lib/watch.js';
+import { fillKeys, listKey } from '../music/songkey.js';
+import { englishNamesFor, toEnglishQuery } from '../lib/readings.js';
 
 const earLink = (g) =>
   `/ear?title=${encodeURIComponent(baseTitle(g.title || ''))}&artist=${encodeURIComponent(g.artist || '')}${g.appleId ? `&appleId=${g.appleId}` : ''}`;
@@ -74,20 +76,43 @@ export async function openGroup(g, { replace = false } = {}) {
   go('/song/' + id, { replace });
 }
 
+// ---------------------------------------------------------------- 探すときの照らし合わせ
+
+// 保存した曲が、打った言葉に当たるか(カタカナの読みは英語表記の曲名・アーティストにも当てる)
+function matchSong(song, word) {
+  const hay = [norm(song.title), norm(song.artist)];
+  return [word, ...englishNamesFor(word)].map(norm).some((w) => w && hay.some((x) => x.includes(w)));
+}
+
+// 同じ曲名で別のアーティストがある曲名(取り違えないようにアーティストに色をつける)
+function sameTitles(list) {
+  const by = new Map();
+  for (const s of list) {
+    const t = norm(baseTitle(s.title));
+    if (!by.has(t)) by.set(t, new Set());
+    by.get(t).add(norm(s.artist));
+  }
+  return new Set([...by].filter(([, a]) => a.size > 1).map(([t]) => t));
+}
+
+const ArtistName = ({ name, twin }) => html`<span className=${cx('song-row-artist', twin && 'is-twin')}>${name}</span>`;
+
 // ---------------------------------------------------------------- 曲の行
 
-function SongRow({ song, onOpen }) {
+function SongRow({ song, onOpen, showKey = false, twin = false }) {
   const st = song.settings || {};
   const bits = [];
   if (st.instrument === 'piano') bits.push('ピアノ');
   if (typeof st.capo === 'number') bits.push(st.capo ? `カポ ${st.capo}` : 'カポなし');
   if (st.transpose) bits.push(`キー ${signed(st.transpose)}`);
+  if (showKey && listKey(song)) bits.unshift(`原曲 ${listKey(song)}`);
+  const note = titleNote(song);
   return html`<li className="song-row">
     <button className="song-row-main" onClick=${onOpen}>
       <${Artwork} song=${song} size=${48} />
       <span className="song-row-text">
-        <span className="song-row-title">${song.title}</span>
-        <span className="song-row-sub">${song.artist}${bits.length ? html`<span className="song-row-tags">${bits.join(' ・ ')}</span>` : null}</span>
+        <span className="song-row-title">${song.title}${note ? html`<span className="title-note">${note}</span>` : null}</span>
+        <span className="song-row-sub"><${ArtistName} name=${song.artist} twin=${twin} />${bits.length ? html`<span className="song-row-tags">${bits.join(' ・ ')}</span>` : null}</span>
       </span>
     </button>
     <button
@@ -162,12 +187,27 @@ export function Home() {
   useEffect(() => {
     checkWatched();
   }, []);
+  // キーが空欄の曲に推定を入れる(ほかの端末の変更を上書きしないよう、同期の最中は待つ)
+  useEffect(() => {
+    if (sync.status === 'idle' && sync.lastSyncedAt) fillKeys().catch(() => {});
+  }, [sync.status, sync.lastSyncedAt, songs.length]);
+  const twins = useMemo(() => sameTitles(songs), [songs]);
+  const isTwin = (s) => twins.has(norm(baseTitle(s.title)));
+  const [keyPick, setKeyPick] = useState('');
+  const keys = useMemo(() => {
+    const n = new Map();
+    for (const s of songs) {
+      const k = listKey(s);
+      if (k) n.set(k, (n.get(k) || 0) + 1);
+    }
+    return [...n].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [songs]);
+  const inKey = keyPick ? songs.filter((s) => listKey(s) === keyPick).sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0)) : [];
   const found = songs.filter((s) => s.source === 'ear' && s.watchFound);
   // お気に入りが増えてきたら絞り込み欄を出す
   const [filter, setFilter] = useState('');
   const shownFavs = useMemo(() => {
-    const w = norm(filter);
-    return w ? favs.filter((s) => norm(s.title).includes(w) || norm(s.artist).includes(w)) : favs;
+    return norm(filter) ? favs.filter((s) => matchSong(s, filter.trim())) : favs;
   }, [favs, filter]);
 
   return html`<div className="page home">
@@ -229,7 +269,7 @@ export function Home() {
         : null}
       ${favs.length
         ? shownFavs.length
-          ? html`<ul className="song-list">${shownFavs.map((s) => html`<${SongRow} key=${s.id} song=${s} onOpen=${() => go('/song/' + s.id)} />`)}</ul>`
+          ? html`<ul className="song-list">${shownFavs.map((s) => html`<${SongRow} key=${s.id} song=${s} twin=${isTwin(s)} onOpen=${() => go('/song/' + s.id)} />`)}</ul>`
           : html`<p className="muted small">「${filter}」に合うお気に入りはありません</p>`
         : html`<${Empty} icon="music" title="まだお気に入りはありません">
             曲を開いて右上の ☆ を押すと、ここに並びます。<br />よく弾く曲・練習中の曲を入れておきましょう。
@@ -239,7 +279,17 @@ export function Home() {
     ${recent.length
       ? html`<section className="home-section">
           <div className="section-head"><h2><${Icon} name="clock" size=${17} className="icon-muted" /> 最近ひらいた曲</h2></div>
-          <ul className="song-list">${recent.map((s) => html`<${SongRow} key=${s.id} song=${s} onOpen=${() => go('/song/' + s.id)} />`)}</ul>
+          <ul className="song-list">${recent.map((s) => html`<${SongRow} key=${s.id} song=${s} twin=${isTwin(s)} onOpen=${() => go('/song/' + s.id)} />`)}</ul>
+        </section>`
+      : null}
+
+    ${keys.length
+      ? html`<section className="home-section">
+          <div className="section-head"><h2><${Icon} name="music" size=${17} className="icon-muted" /> キーで探す</h2></div>
+          <div className="key-filter" role="group" aria-label="原曲キーで絞り込む">
+            ${keys.map(([k, n]) => html`<button key=${k} className=${cx('chip chip-sm', keyPick === k && 'is-on')} aria-pressed=${keyPick === k} onClick=${() => setKeyPick(keyPick === k ? '' : k)}>${k}<span className="key-count">${n}</span></button>`)}
+          </div>
+          ${inKey.length ? html`<ul className="song-list">${inKey.map((s) => html`<${SongRow} key=${s.id} song=${s} twin=${isTwin(s)} showKey=${true} onOpen=${() => go('/song/' + s.id)} />`)}</ul>` : null}
         </section>`
       : null}
 
@@ -277,6 +327,7 @@ export function Search({ q }) {
   const L = useLibrary();
   const [state, setState] = useState({ loading: true, error: null, groups: [], retry: 0 });
   const [round, setRound] = useState(0); // 「もう一度探す」を押した回数
+  const english = useMemo(() => toEnglishQuery(q), [q]);
   useEffect(() => {
     if (!q) return;
     rememberQuery(q);
@@ -287,10 +338,10 @@ export function Search({ q }) {
     }
     setState({ loading: true, error: null, groups: [], retry: 0 });
     // つながりにくいときは自動で何回か問い合わせ直す(アプリを裏にして戻ってきたときも、すぐ出し直す)
-    apiRetry('search', { q }, { onRetry: (n) => alive && setState((s) => ({ ...s, retry: n })) })
+    apiRetry('search', { q: english || q }, { onRetry: (n) => alive && setState((s) => ({ ...s, retry: n })) })
       .then((r) => {
         if (!alive) return;
-        const res = { groups: r.groups || [], artists: r.artists || [], understood: r.understood || null };
+        const res = { groups: r.groups || [], artists: r.artists || [], understood: r.understood || english || null };
         searchCache.set(q, res);
         setState({ loading: false, error: null, ...res });
       })
@@ -313,15 +364,18 @@ export function Search({ q }) {
 
   // 保存済みの曲からも探す(オフラインでも出る)
   const local = useMemo(() => {
-    const words = (q || '').split(/\s+/).map(norm).filter(Boolean);
+    const words = (q || '').split(/\s+/).filter((w) => norm(w));
+    // 「エド シーラン」のように名前を分けて打っても、まるごとの読みは英語の言葉にして当てる
+    const en = (toEnglishQuery(q) || '').split(/\s+/).filter((w) => norm(w));
     if (!words.length) return [];
     return L.all()
       .filter((s) => s.sheet || s.fav)
-      .filter((s) => words.every((w) => norm(s.title).includes(w) || norm(s.artist).includes(w)))
+      .filter((s) => words.every((w) => matchSong(s, w)) || (en.length > 0 && en.every((w) => matchSong(s, w))))
       .slice(0, 5);
   }, [q, L.all().length]);
 
   const withSheets = state.groups.filter((g) => g.sources.length);
+  const twins = sameTitles([...withSheets, ...L.all()]);
   // オルゴール・カラオケ・カバー集などは「譜面がまだ無い曲」にも出さない
   const JUNK = /オルゴール|orgel|music box|originally performed|karaoke|カラオケ|instrumental|インスト|relax|ヒーリング|α波|cover|カバー/i;
   const without = state.groups.filter((g) => !g.sources.length && !JUNK.test(g.title + ' ' + g.artist));
@@ -341,7 +395,7 @@ export function Search({ q }) {
     ${local.length
       ? html`<section className="home-section">
           <div className="section-head"><h2>保存している曲</h2></div>
-          <ul className="song-list">${local.map((s) => html`<${SongRow} key=${s.id} song=${s} onOpen=${() => go('/song/' + s.id)} />`)}</ul>
+          <ul className="song-list">${local.map((s) => html`<${SongRow} key=${s.id} song=${s} twin=${twins.has(norm(baseTitle(s.title)))} onOpen=${() => go('/song/' + s.id)} />`)}</ul>
         </section>`
       : null}
 
@@ -370,7 +424,7 @@ export function Search({ q }) {
                 </span>
               </${Empty}>`
             : html`<ul className="song-list results">
-                ${withSheets.map((g, i) => html`<${ResultRow} key=${i} g=${g} />`)}
+                ${withSheets.map((g, i) => html`<${ResultRow} key=${i} g=${g} twin=${twins.has(norm(baseTitle(g.title)))} />`)}
               </ul>`}
       ${!state.loading && without.length
         ? html`<div className="no-sheet">
@@ -382,7 +436,7 @@ export function Search({ q }) {
                     <${Artwork} song=${g} size=${40} />
                     <span className="song-row-text">
                       <span className="song-row-title">${baseTitle(g.title)}</span>
-                      <span className="song-row-sub">${g.artist} ・ <span className="ear-hint"><${Icon} name="mic" size=${13} /> 耳コピで作る</span></span>
+                      <span className="song-row-sub"><${ArtistName} name=${g.artist} /> ・ <span className="ear-hint"><${Icon} name="mic" size=${13} /> 耳コピで作る</span></span>
                     </span>
                   </button>
                 </li>`,
@@ -411,7 +465,7 @@ function ArtistHit({ a }) {
   </button>`;
 }
 
-function ResultRow({ g }) {
+function ResultRow({ g, twin }) {
   const saved = lib.get(songIdFor(g.title, g.artist));
   const kinds = [...new Set(g.sources.map((s) => s.source))];
   const versions = g.sources.length;
@@ -420,7 +474,7 @@ function ResultRow({ g }) {
       <${Artwork} song=${g} size=${48} />
       <span className="song-row-text">
         <span className="song-row-title">${g.title}${saved && saved.fav ? html` <span className="fav-mark">★</span>` : null}</span>
-        <span className="song-row-sub">${g.artist}</span>
+        <span className="song-row-sub"><${ArtistName} name=${g.artist} twin=${twin} /></span>
         <span className="src-badges">
           ${kinds.map((k) => html`<span key=${k} className=${'src-badge src-' + k}>${sourceName(k)}</span>`)}
           ${versions > kinds.length ? html`<span className="muted small">${versions}版</span>` : null}
